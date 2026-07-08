@@ -15,18 +15,56 @@ class AuthNotifier extends Notifier<AuthState> {
   Future<void> _loadSaved() async {
     await loadApiServer();
     if (state.isLoggedIn) return;
-    final cookie = await loadCookie();
-    final electricityToken = await loadElectricityToken();
-    if (cookie != null) {
-      final sp = await SharedPreferences.getInstance();
-      final username = sp.getString('username');
-      state = AuthState(
-        isLoggedIn: true,
-        cookie: cookie,
-        username: username,
-        electricityToken: electricityToken,
-      );
+
+    final savedCookie = await loadCookie();
+    final savedToken = await loadElectricityToken();
+    final username = await _loadUsername();
+
+    // 1. 有 cookie，验证是否有效
+    if (savedCookie != null && username != null) {
+      bool valid = false;
+      try {
+        final vr = await validateSession(savedCookie);
+        valid = vr.isOk && vr.data?['status'] == 'success';
+      } catch (_) {}
+
+      if (valid) {
+        state = AuthState(
+          isLoggedIn: true,
+          cookie: savedCookie,
+          username: username,
+          electricityToken: savedToken,
+        );
+        return;
+      }
+
+      // 2. Cookie 过期，尝试自动重登
+      final password = await loadPassword();
+      if (password != null) {
+        try {
+          final r = await loginJwxt(username, password);
+          if (r.isOk && r.data?['status'] == 'success') {
+            final newCookie = r.data!['cookie'] as String;
+            await saveCookie(newCookie);
+            // 重登成功，也试电费
+            await doElectricityLogin(username, password);
+            final newToken = await loadElectricityToken();
+            state = AuthState(
+              isLoggedIn: true,
+              cookie: newCookie,
+              username: username,
+              electricityToken: newToken ?? savedToken,
+            );
+            return;
+          }
+        } catch (_) {}
+      }
     }
+  }
+
+  Future<String?> _loadUsername() async {
+    final sp = await SharedPreferences.getInstance();
+    return sp.getString('username');
   }
 
   Future<void> login(String username, String password) async {

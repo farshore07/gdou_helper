@@ -158,6 +158,13 @@ class DormitoryPage extends ConsumerWidget {
                 ],
               ]),
             ],
+            // 用电日历
+            const SizedBox(height: 20),
+            OutlinedButton.icon(
+              onPressed: () => _showConsumeCalendar(context, ref),
+              icon: const Icon(Icons.calendar_month, size: 16),
+              label: const Text('查看本月用电日历'),
+            ),
             // 充值记录
             if (data.recharges.isNotEmpty) ...[
               const SizedBox(height: 16),
@@ -329,6 +336,216 @@ class DormitoryPage extends ConsumerWidget {
       }
     }
   }
+
+  Future<void> _showConsumeCalendar(
+      BuildContext context, WidgetRef ref) async {
+    final auth = ref.read(authProvider);
+    final token = auth.electricityToken;
+    if (token == null || auth.username == null) return;
+
+    // 拿 roomCode
+    String? roomCode;
+    try {
+      final roomsR = await fetchElectricityRooms(token);
+      if (roomsR.isOk && roomsR.data != null) {
+        final raw = roomsR.data;
+        if (raw is List && raw.isNotEmpty) {
+          roomCode = (raw[0] as Map<String, dynamic>)['roomCode'] as String?;
+        }
+      } else {
+        if (context.mounted) Toast.error(context, '获取房间失败');
+        return;
+      }
+    } catch (e) {
+      if (context.mounted) Toast.error(context, '请求失败: $e');
+      return;
+    }
+    if (roomCode == null) {
+      if (context.mounted) Toast.info(context, '未绑定房间，请先绑定');
+      return;
+    }
+
+    // 请求本月数据
+    final now = DateTime.now();
+    final lastDay = DateTime(now.year, now.month + 1, 0).day;
+    final start = '${now.year}-${now.month.toString().padLeft(2, '0')}-01';
+    final end = '${now.year}-${now.month.toString().padLeft(2, '0')}-$lastDay';
+
+    List<Map<String, dynamic>> days = [];
+    try {
+      final cr = await fetchElectricityConsume(token, roomCode, start, end);
+      if (cr.isOk && cr.data != null) {
+        // Try various possible keys
+        var raw = cr.data!['useEleByDayList'];
+        raw ??= cr.data!['list'];
+        raw ??= cr.data!['records'];
+        if (raw is List) days = raw.cast<Map<String, dynamic>>();
+      }
+    } catch (e) {
+      if (context.mounted) Toast.error(context, '获取日历失败: $e');
+    }
+    if (days.isEmpty && context.mounted) {
+      Toast.info(context, '本月暂无用电数据');
+      return;
+    }
+
+    if (!context.mounted) return;
+
+    // 建 day→value 映射
+    final dayMap = <int, double>{};
+    for (final d in days) {
+      // date 格式 "2026-07-01" → 提取日
+      final dateStr = d['date'] as String? ?? '';
+      final dayInt = int.tryParse(dateStr.split('-').last) ?? 0;
+      final raw = d['useElectric'];
+      final double val = raw is num ? raw.toDouble() : 0.0;
+      if (dayInt > 0) dayMap[dayInt] = val;
+    }
+
+    if (!context.mounted) return;
+    final cs = Theme.of(context).colorScheme;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(height: 12),
+            Text('${now.year}年${now.month}月用电日历',
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 16),
+            // 星期头
+            Row(
+              children: ['一', '二', '三', '四', '五', '六', '日']
+                  .map((s) => Expanded(
+                        child: Text(s,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                fontSize: 12, color: cs.outline)),
+                      ))
+                  .toList(),
+            ),
+            const SizedBox(height: 4),
+            // 日期格子
+            _buildMonthGrid(now.year, now.month, dayMap, cs),
+            const SizedBox(height: 12),
+            const SizedBox(height: 12),
+            // 详情统计
+            _buildDetailSummary(dayMap, cs),
+            const SizedBox(height: 12),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Container(width: 10, height: 10,
+                  decoration: BoxDecoration(
+                      color: cs.primary.withAlpha(80),
+                      borderRadius: BorderRadius.circular(2))),
+              const SizedBox(width: 6),
+              Text('用电量越深越多', style: TextStyle(fontSize: 11, color: cs.outline)),
+            ]),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMonthGrid(int year, int month,
+      Map<int, double> dayMap, ColorScheme cs) {
+    final firstDay = DateTime(year, month, 1);
+    final lastDay = DateTime(year, month + 1, 0);
+    final startOffset = firstDay.weekday - 1; // Monday = 0
+    final totalDays = lastDay.day;
+    final maxVal = dayMap.isEmpty ? 1.0 : dayMap.values.reduce((a, b) => a > b ? a : b);
+
+    final cells = <Widget>[];
+    for (var i = 0; i < startOffset; i++) {
+      cells.add(const SizedBox());
+    }
+    for (var d = 1; d <= totalDays; d++) {
+      final val = dayMap[d] ?? 0;
+      final alpha = maxVal > 0 ? (val / maxVal * 200).clamp(0, 200).toInt() + 30 : 30;
+      cells.add(
+        Container(
+          margin: const EdgeInsets.all(1),
+          decoration: BoxDecoration(
+            color: val > 0
+                ? cs.primary.withAlpha(alpha)
+                : Colors.grey.withAlpha(20),
+            borderRadius: BorderRadius.circular(3),
+          ),
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text('$d', style: TextStyle(fontSize: 11, fontWeight: val > 0 ? FontWeight.w600 : FontWeight.normal, color: val > 0 ? cs.onPrimary : cs.outline)),
+            if (val > 0) Text(val.toStringAsFixed(1), style: TextStyle(fontSize: 7, color: val > maxVal * 0.5 ? cs.onPrimary : cs.outline)),
+          ]),
+        ),
+      );
+    }
+    // Pad to full rows
+    while (cells.length % 7 != 0) {
+      cells.add(const SizedBox());
+    }
+
+    return Column(
+      children: List.generate(cells.length ~/ 7, (row) {
+        return Row(
+          children: List.generate(7, (col) {
+            return Expanded(child: SizedBox(height: 40, child: cells[row * 7 + col]));
+          }),
+        );
+      }),
+    );
+  }
+
+  Widget _buildDetailSummary(Map<int, double> dayMap, ColorScheme cs) {
+    if (dayMap.isEmpty) return const SizedBox.shrink();
+    final values = dayMap.values.where((v) => v > 0).toList();
+    if (values.isEmpty) return const SizedBox.shrink();
+    final total = values.fold(0.0, (a, b) => a + b);
+    final avg = total / values.length;
+    final max = values.reduce((a, b) => a > b ? a : b);
+    final min = values.reduce((a, b) => a < b ? a : b);
+    final maxDay = dayMap.entries.firstWhere((e) => e.value == max).key;
+    final minDay = dayMap.entries.firstWhere((e) => e.value == min).key;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(children: [
+        Text('用电详情', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface)),
+        const SizedBox(height: 8),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+          _detailItem('本月总计', '${total.toStringAsFixed(1)} 度', cs),
+          _detailItem('日均', '${avg.toStringAsFixed(1)} 度', cs),
+        ]),
+        const SizedBox(height: 4),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
+          _detailItem('最高', '${max.toStringAsFixed(1)} 度\n$maxDay日', cs),
+          _detailItem('最低', '${min.toStringAsFixed(1)} 度\n$minDay日', cs),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _detailItem(String label, String value, ColorScheme cs) => Column(
+        children: [
+          Text(label, style: TextStyle(fontSize: 11, color: cs.outline)),
+          Text(value, textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
+        ],
+      );
 
   Widget _balanceCard(String label, double amount, IconData icon, ColorScheme cs) {
     final color = amount >= 50 ? Colors.green : (amount >= 20 ? Colors.orange : cs.error);

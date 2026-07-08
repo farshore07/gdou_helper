@@ -135,7 +135,7 @@ final examsProvider =
 final gradesProvider =
     AsyncNotifierProvider<GradesNotifier, List<Score>>(GradesNotifier.new);
 
-// ── 电费（余额 + 月度对比 + 记录） ──
+// ── 电费（缓存优先） ──
 class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
   @override
   Future<ElectricityData?> build() async {
@@ -143,25 +143,44 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
     final token = auth.electricityToken;
     if (token == null || auth.username == null) return null;
 
-    // 分别请求，记录首个错误
+    final cacheKey = 'electricity_${auth.username}';
+    String? firstErrorMsg;
+
+    try {
+      final data = await _fetchElectricity(token, auth.username!);
+      return data;
+    } catch (e) {
+      firstErrorMsg = handleError(e).message;
+      // 有缓存则回退到缓存
+      final cached = await CacheService.get(cacheKey);
+      if (cached != null) {
+        final d = ElectricityData.fromJson(jsonDecode(cached));
+        return d;
+      }
+      if (firstErrorMsg.contains('401')) {
+        throw ApiException('电费登录已过期，请重新登录');
+      }
+      throw ApiException(firstErrorMsg);
+    }
+  }
+
+  Future<ElectricityData> _fetchElectricity(
+      String token, String username) async {
     Object? firstError;
     ApiResponse<Map<String, dynamic>>? balancesR;
     ApiResponse<Map<String, dynamic>>? situationR;
     ({List<ElecRecord> recharges, List<ElecRecord> deductions})? history;
 
-    try {
-      balancesR = await fetchElectricityBalances(token);
-    } catch (e) { firstError = e; }
-    try {
-      situationR = await fetchElectricitySituation(token, auth.username!);
-    } catch (_) {}
-    try {
-      history = await _fetchRoomsAndHistory(token, auth.username!);
-    } catch (_) {}
+    try { balancesR = await fetchElectricityBalances(token); }
+    catch (e) { firstError = e; }
+    try { situationR = await fetchElectricitySituation(token, username); }
+    catch (_) {}
+    try { history = await _fetchRoomsAndHistory(token, username); }
+    catch (_) {}
 
     if (balancesR == null || !balancesR.isOk || balancesR.data == null) {
       if (firstError != null) throw firstError;
-      return null;
+      throw const ApiException('获取电费数据失败');
     }
     final a = balancesR.data!;
     final ac = a['ac'] as Map<String, dynamic>?;
@@ -174,7 +193,7 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
       usageChange = (situationR.data!['usageChange'] as num?)?.toDouble();
     }
 
-    return ElectricityData(
+    final data = ElectricityData(
       acBalance: (ac?['moneyBalance'] as num?)?.toDouble() ?? 0,
       lightBalance: (light?['moneyBalance'] as num?)?.toDouble() ?? 0,
       todayUsage: ((ac?['todayBalance'] as num?)?.toDouble() ?? 0) +
@@ -188,6 +207,10 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
       recharges: history?.recharges ?? [],
       deductions: history?.deductions ?? [],
     );
+    CacheService.set(
+        'electricity_${ref.read(authProvider).username}',
+        jsonEncode(data.toJson()));
+    return data;
   }
 }
 
@@ -256,6 +279,7 @@ class ElectricityData {
   final double? usageChange;
   final List<ElecRecord> recharges;
   final List<ElecRecord> deductions;
+  final Map<int, double> dailyUsage; // day → 度数
   double get totalBalance => acBalance + lightBalance;
   const ElectricityData({
     required this.acBalance,
@@ -268,5 +292,25 @@ class ElectricityData {
     this.usageChange,
     this.recharges = const [],
     this.deductions = const [],
+    this.dailyUsage = const {},
   });
+
+  Map<String, dynamic> toJson() => {
+        'ac': acBalance, 'light': lightBalance, 'today': todayUsage,
+        'month': monthUsage, 'roomName': roomName,
+        'curMonth': currentMonthUsage, 'lastMonth': lastMonthUsage,
+        'change': usageChange,
+      };
+
+  factory ElectricityData.fromJson(Map<String, dynamic> json) =>
+      ElectricityData(
+        acBalance: (json['ac'] as num?)?.toDouble() ?? 0,
+        lightBalance: (json['light'] as num?)?.toDouble() ?? 0,
+        todayUsage: (json['today'] as num?)?.toDouble() ?? 0,
+        monthUsage: (json['month'] as num?)?.toDouble() ?? 0,
+        roomName: json['roomName'] as String?,
+        currentMonthUsage: (json['curMonth'] as num?)?.toDouble(),
+        lastMonthUsage: (json['lastMonth'] as num?)?.toDouble(),
+        usageChange: (json['change'] as num?)?.toDouble(),
+      );
 }

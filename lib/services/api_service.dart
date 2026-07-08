@@ -263,6 +263,14 @@ Future<ApiResponse<dynamic>> searchRooms(
   return _toResponseAny(r);
 }
 
+Future<ApiResponse<Map<String, dynamic>>> fetchElectricityConsume(
+    String token, String roomCode, String startDate, String endDate) async {
+  final r = await dio.post('/api/v1/electricity/consume',
+      data: {'roomCode': roomCode, 'startDate': startDate, 'endDate': endDate},
+      options: Options(headers: {'X-Electricity-Token': token}));
+  return _toResponse(r);
+}
+
 ApiResponse<Map<String, dynamic>> _toResponse(Response r) {
   final code = r.data['code'] as String? ?? '';
   if (code != 'OK') {
