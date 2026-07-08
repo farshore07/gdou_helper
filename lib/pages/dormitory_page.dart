@@ -273,12 +273,12 @@ class DormitoryPage extends ConsumerWidget {
     // Step 4: 绑定
     final bindR = await bindRooms(token, auth.username!, [roomCode]);
     if (bindR.isOk && context.mounted) {
-      Toast.success(context, '绑定成功');
+      Toast.operationSuccess(context, '绑定');
       ref.invalidate(electricityProvider);
     }
     } catch (e) {
       if (context.mounted) {
-        Toast.error(context, '操作失败: $e');
+        Toast.operationFailed(context, '$e');
       }
     }
   }
@@ -304,7 +304,7 @@ class DormitoryPage extends ConsumerWidget {
     if (!context.mounted) return;
 
     if (bound.isEmpty) {
-      Toast.info(context, '暂无已绑定房间');
+      Toast.noData(context, '已绑定房间');
       return;
     }
 
@@ -353,19 +353,17 @@ class DormitoryPage extends ConsumerWidget {
           roomCode = (raw[0] as Map<String, dynamic>)['roomCode'] as String?;
         }
       } else {
-        if (context.mounted) Toast.error(context, '获取房间失败');
+        if (context.mounted) Toast.serverError(context);
         return;
       }
     } catch (e) {
-      if (context.mounted) Toast.error(context, '请求失败: $e');
+      if (context.mounted) Toast.networkError(context);
       return;
     }
     if (roomCode == null) {
-      if (context.mounted) Toast.info(context, '未绑定房间，请先绑定');
+      if (context.mounted) Toast.info(context, '请先绑定宿舍房间');
       return;
     }
-
-    // 请求本月数据
     final now = DateTime.now();
     final lastDay = DateTime(now.year, now.month + 1, 0).day;
     final start = '${now.year}-${now.month.toString().padLeft(2, '0')}-01';

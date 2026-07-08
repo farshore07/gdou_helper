@@ -12,6 +12,19 @@ import '../services/cache_service.dart';
 
 // ── 学期拆分："2025-2026-2" → academicYear: "2025-2026", term: "12" ──
 // GDOU正方教务: 第一学期=3, 第二学期=12
+// ── 401 自动重登 + 重试 ──
+Future<T> _withAutoReLogin<T>(Ref ref, Future<T> Function() fn) async {
+  try {
+    return await fn();
+  } on ApiException catch (e) {
+    if (e.statusCode == 401) {
+      final ok = await ref.read(authProvider.notifier).silentReLogin();
+      if (ok) return fn();
+    }
+    rethrow;
+  }
+}
+
 const _termMap = {'1': '3', '2': '12'};
 (String academicYear, String term) _splitSemester(String s) {
   final parts = s.split('-');
@@ -49,7 +62,8 @@ class TimetableNotifier extends AsyncNotifier<List<Course>> {
   Future<List<Course>> _fetchAndCache(
       String key, String cookie, String semester) async {
     final (year, term) = _splitSemester(semester);
-    final r = await fetchTimetable(cookie, year, term);
+    final r = await _withAutoReLogin(
+        ref, () => fetchTimetable(cookie, year, term));
     if (!r.isOk || r.data == null) throw ApiException('课表数据为空');
     final courses = (r.data!['courses'] as List<dynamic>?) ?? [];
     final list = courses
@@ -93,7 +107,8 @@ class ExamsNotifier extends AsyncNotifier<List<Exam>> {
   Future<List<Exam>> _fetchExams(
       String key, String cookie, String semester) async {
     final (year, term) = _splitSemester(semester);
-    final r = await fetchExams(cookie, year, term);
+    final r = await _withAutoReLogin(
+        ref, () => fetchExams(cookie, year, term));
     if (!r.isOk || r.data == null) throw ApiException('考试数据为空');
     final items = (r.data!['items'] as List<dynamic>?) ?? [];
     CacheService.set(key, jsonEncode(items));
@@ -121,7 +136,8 @@ class GradesNotifier extends AsyncNotifier<List<Score>> {
   Future<List<Score>> _fetchGrades(
       String key, String cookie, String semester) async {
     final (year, term) = _splitSemester(semester);
-    final r = await fetchGrades(cookie, year, term);
+    final r = await _withAutoReLogin(
+        ref, () => fetchGrades(cookie, year, term));
     if (!r.isOk || r.data == null) throw ApiException('成绩数据为空');
     final items = (r.data!['items'] as List<dynamic>?) ?? [];
     CacheService.set(key, jsonEncode(items));
@@ -158,7 +174,17 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
         return d;
       }
       if (firstErrorMsg.contains('401')) {
-        throw ApiException('电费登录已过期，请重新登录');
+        // 尝试自动重登
+        final ok = await ref.read(authProvider.notifier).silentReLogin();
+        if (ok) {
+          final newToken = ref.read(authProvider).electricityToken;
+          if (newToken != null) {
+            try {
+              return _fetchElectricity(newToken, ref.read(authProvider).username!);
+            } catch (_) {}
+          }
+        }
+        throw ApiException('会话已过期，自动重登失败，请手动重新登录');
       }
       throw ApiException(firstErrorMsg);
     }

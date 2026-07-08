@@ -99,6 +99,30 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
+  // 静默重登（供 401 拦截器/页面调用）
+  Future<bool> silentReLogin() async {
+    final username = state.username;
+    final password = await loadPassword();
+    if (username == null || password == null) return false;
+    try {
+      // 重登教务
+      final r = await loginJwxt(username, password);
+      if (r.isOk && r.data?['status'] == 'success') {
+        final cookie = r.data!['cookie'] as String;
+        await saveCookie(cookie);
+        // 重登电费
+        await doElectricityLogin(username, password);
+        final token = await loadElectricityToken();
+        state = state.copyWith(
+          cookie: cookie,
+          electricityToken: token ?? state.electricityToken,
+        );
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
   Future<bool> doElectricityLogin(String username, String password) async {
     final r = await loginElectricity(username, password);
     if (r.isOk && r.data?['accessToken'] != null) {

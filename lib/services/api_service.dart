@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 final dio = Dio(BaseOptions(
   connectTimeout: const Duration(seconds: 30),
   receiveTimeout: const Duration(seconds: 120),
-  validateStatus: (s) => s != null && s < 600, // 允许所有状态码，手动处理
+  validateStatus: (s) => s != null && s < 600,
 ));
 
 // ── 错误处理 ──
