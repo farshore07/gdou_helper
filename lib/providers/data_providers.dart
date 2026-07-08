@@ -1,11 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'dart:convert';
+
 import '../models/course.dart';
 import '../models/exam.dart';
 import '../models/score.dart';
 import '../providers/auth_provider.dart';
 import '../providers/semester_provider.dart';
 import '../services/api_service.dart';
+import '../services/cache_service.dart';
 
 // ── 学期拆分："2025-2026-2" → academicYear: "2025-2026", term: "12" ──
 // GDOU正方教务: 第一学期=3, 第二学期=12
@@ -18,20 +21,46 @@ const _termMap = {'1': '3', '2': '12'};
   return (year, term);
 }
 
-// ── 课表 ──
+// ── 课表（缓存优先 + 后台刷新） ──
 class TimetableNotifier extends AsyncNotifier<List<Course>> {
   @override
   Future<List<Course>> build() async {
     final auth = ref.watch(authProvider);
     final semester = ref.watch(semesterProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return [];
+    final cacheKey = 'timetable_$semester';
+
+    // 1. 先返回缓存
+    final cached = await CacheService.get(cacheKey);
+    if (cached != null) {
+      final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
+      final courses = list
+          .map((c) => Course.fromApiJson(c, semester))
+          .toList();
+      // 后台刷新
+      _fetchAndCache(cacheKey, auth.cookie!, semester);
+      return courses;
+    }
+
+    // 2. 无缓存，请求 API
+    return _fetchAndCache(cacheKey, auth.cookie!, semester);
+  }
+
+  Future<List<Course>> _fetchAndCache(
+      String key, String cookie, String semester) async {
     final (year, term) = _splitSemester(semester);
-    final r = await fetchTimetable(auth.cookie!, year, term);
-    if (!r.isOk || r.data == null) return [];
+    final r = await fetchTimetable(cookie, year, term);
+    if (!r.isOk || r.data == null) throw ApiException('课表数据为空');
     final courses = (r.data!['courses'] as List<dynamic>?) ?? [];
-    return courses
-        .map((c) => Course.fromApiJson(c as Map<String, dynamic>, semester))
+    final list = courses
+        .map((c) {
+          final m = c as Map<String, dynamic>;
+          return Course.fromApiJson(m, semester);
+        })
         .toList();
+    // 写缓存
+    CacheService.set(key, jsonEncode(r.data!['courses']));
+    return list;
   }
 
   Future<void> refresh() async {
@@ -43,20 +72,32 @@ class TimetableNotifier extends AsyncNotifier<List<Course>> {
 final timetableProvider =
     AsyncNotifierProvider<TimetableNotifier, List<Course>>(TimetableNotifier.new);
 
-// ── 考试 ──
+// ── 考试（缓存优先 + 后台刷新） ──
 class ExamsNotifier extends AsyncNotifier<List<Exam>> {
   @override
   Future<List<Exam>> build() async {
     final auth = ref.watch(authProvider);
     final semester = ref.watch(semesterProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return [];
+    final cacheKey = 'exams_$semester';
+    final cached = await CacheService.get(cacheKey);
+    if (cached != null) {
+      final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
+      final exams = list.map((e) => Exam.fromApiJson(e)).toList();
+      _fetchExams(cacheKey, auth.cookie!, semester);
+      return exams;
+    }
+    return _fetchExams(cacheKey, auth.cookie!, semester);
+  }
+
+  Future<List<Exam>> _fetchExams(
+      String key, String cookie, String semester) async {
     final (year, term) = _splitSemester(semester);
-    final r = await fetchExams(auth.cookie!, year, term);
-    if (!r.isOk || r.data == null) return [];
+    final r = await fetchExams(cookie, year, term);
+    if (!r.isOk || r.data == null) throw ApiException('考试数据为空');
     final items = (r.data!['items'] as List<dynamic>?) ?? [];
-    return items
-        .map((e) => Exam.fromApiJson(e as Map<String, dynamic>))
-        .toList();
+    CacheService.set(key, jsonEncode(items));
+    return items.map((e) => Exam.fromApiJson(e as Map<String, dynamic>)).toList();
   }
 }
 
@@ -66,13 +107,25 @@ class GradesNotifier extends AsyncNotifier<List<Score>> {
     final auth = ref.watch(authProvider);
     final semester = ref.watch(semesterProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return [];
+    final cacheKey = 'grades_$semester';
+    final cached = await CacheService.get(cacheKey);
+    if (cached != null) {
+      final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
+      final scores = list.map((s) => Score.fromApiJson(s, semester)).toList();
+      _fetchGrades(cacheKey, auth.cookie!, semester);
+      return scores;
+    }
+    return _fetchGrades(cacheKey, auth.cookie!, semester);
+  }
+
+  Future<List<Score>> _fetchGrades(
+      String key, String cookie, String semester) async {
     final (year, term) = _splitSemester(semester);
-    final r = await fetchGrades(auth.cookie!, year, term);
-    if (!r.isOk || r.data == null) return [];
+    final r = await fetchGrades(cookie, year, term);
+    if (!r.isOk || r.data == null) throw ApiException('成绩数据为空');
     final items = (r.data!['items'] as List<dynamic>?) ?? [];
-    return items
-        .map((s) => Score.fromApiJson(s as Map<String, dynamic>, semester))
-        .toList();
+    CacheService.set(key, jsonEncode(items));
+    return items.map((s) => Score.fromApiJson(s as Map<String, dynamic>, semester)).toList();
   }
 }
 
@@ -90,14 +143,15 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
     final token = auth.electricityToken;
     if (token == null || auth.username == null) return null;
 
-    // 分别请求，单独容错
+    // 分别请求，记录首个错误
+    Object? firstError;
     ApiResponse<Map<String, dynamic>>? balancesR;
     ApiResponse<Map<String, dynamic>>? situationR;
     ({List<ElecRecord> recharges, List<ElecRecord> deductions})? history;
 
     try {
       balancesR = await fetchElectricityBalances(token);
-    } catch (_) {}
+    } catch (e) { firstError = e; }
     try {
       situationR = await fetchElectricitySituation(token, auth.username!);
     } catch (_) {}
@@ -105,7 +159,10 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
       history = await _fetchRoomsAndHistory(token, auth.username!);
     } catch (_) {}
 
-    if (balancesR == null || !balancesR.isOk || balancesR.data == null) return null;
+    if (balancesR == null || !balancesR.isOk || balancesR.data == null) {
+      if (firstError != null) throw firstError;
+      return null;
+    }
     final a = balancesR.data!;
     final ac = a['ac'] as Map<String, dynamic>?;
     final light = a['light'] as Map<String, dynamic>?;

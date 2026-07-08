@@ -52,14 +52,10 @@ class AuthNotifier extends Notifier<AuthState> {
             loading: false, error: r.data?['message'] ?? r.message);
       }
     } on DioException catch (e) {
-      final msg = e.type == DioExceptionType.connectionTimeout
-          ? '连接超时（30秒），请检查网络'
-          : e.type == DioExceptionType.receiveTimeout
-              ? '服务器响应超时（120秒），登录处理中，重试一次'
-              : e.response != null
-                  ? '服务器返回错误 ${e.response?.statusCode}'
-                  : '网络错误：${e.type.name}';
-      state = state.copyWith(loading: false, error: msg);
+      state = state.copyWith(
+          loading: false, error: handleError(e).message);
+    } on ApiException catch (e) {
+      state = state.copyWith(loading: false, error: e.message);
     } catch (e) {
       state = state.copyWith(loading: false, error: '未知错误\n$e');
     }

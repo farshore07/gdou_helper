@@ -4,7 +4,69 @@ import 'package:shared_preferences/shared_preferences.dart';
 final dio = Dio(BaseOptions(
   connectTimeout: const Duration(seconds: 30),
   receiveTimeout: const Duration(seconds: 120),
+  validateStatus: (s) => s != null && s < 600, // 允许所有状态码，手动处理
 ));
+
+// ── 错误处理 ──
+class ApiException implements Exception {
+  final String message;
+  final int? statusCode;
+  final String? apiCode;
+  const ApiException(this.message, {this.statusCode, this.apiCode});
+  @override
+  String toString() => message;
+}
+
+ApiException handleError(dynamic e) {
+  if (e is ApiException) return e;
+  if (e is DioException) {
+    final code = e.response?.statusCode;
+    final apiMsg = _apiErrorMessage(e.response?.data);
+    if (apiMsg != null) return ApiException(apiMsg, statusCode: code);
+    return switch (e.type) {
+      DioExceptionType.connectionTimeout => const ApiException('连接超时，请检查网络'),
+      DioExceptionType.receiveTimeout => const ApiException('服务器响应超时，请重试'),
+      DioExceptionType.connectionError => const ApiException('无法连接服务器，请检查网络或服务器地址'),
+      DioExceptionType.badResponse => ApiException(
+          _statusMessage(code ?? 0), statusCode: code),
+      _ => const ApiException('网络异常，请重试'),
+    };
+  }
+  return const ApiException('未知错误');
+}
+
+String _statusMessage(int code) => switch (code) {
+      400 => '请求参数错误 (400)',
+      401 => '登录已过期，请重新登录 (401)',
+      403 => '服务器拒绝访问 (403)',
+      404 => '接口不存在 (404)',
+      429 => '请求太频繁，请稍后再试 (429)',
+      500 => '服务器内部错误 (500)',
+      502 => '服务器暂不可用 (502)',
+      _ => '服务器返回错误 ($code)',
+    };
+
+String? _apiErrorMessage(dynamic data) {
+  if (data is Map) {
+    final msg = data['message'] as String?;
+    final code = data['code'] as String?;
+    if (code != null && code != 'OK' && msg != null) {
+      return _apiCodeMessage(code) ?? msg;
+    }
+  }
+  return null;
+}
+
+String? _apiCodeMessage(String code) => switch (code) {
+      'UNAUTHORIZED' => '认证失败，请重新登录',
+      'BAD_REQUEST' => '请求参数错误',
+      'NOT_FOUND' => '请求的资源不存在',
+      'FORBIDDEN' => '没有权限访问',
+      'RATE_LIMITED' => '请求太频繁，已触发限流',
+      'BANNED' => 'IP 已被封禁',
+      'SESSION_EXPIRED' => '会话已过期，请重新登录',
+      _ => null,
+    };
 
 String _server = '';
 String get apiBaseUrl => _server;
@@ -202,16 +264,28 @@ Future<ApiResponse<dynamic>> searchRooms(
 }
 
 ApiResponse<Map<String, dynamic>> _toResponse(Response r) {
+  final code = r.data['code'] as String? ?? '';
+  if (code != 'OK') {
+    throw ApiException(r.data['message'] as String? ?? '请求失败',
+        apiCode: code, statusCode: r.statusCode);
+  }
   final d = r.data['data'];
   return ApiResponse(
-    code: r.data['code'],
+    code: code,
     message: r.data['message'],
     data: d is Map<String, dynamic> ? d : (d is Map ? Map<String, dynamic>.from(d) : null),
   );
 }
 
-ApiResponse<dynamic> _toResponseAny(Response r) => ApiResponse(
-      code: r.data['code'],
-      message: r.data['message'],
-      data: r.data['data'],
-    );
+ApiResponse<dynamic> _toResponseAny(Response r) {
+  final code = r.data['code'] as String? ?? '';
+  if (code != 'OK') {
+    throw ApiException(r.data['message'] as String? ?? '请求失败',
+        apiCode: code, statusCode: r.statusCode);
+  }
+  return ApiResponse(
+    code: code,
+    message: r.data['message'],
+    data: r.data['data'],
+  );
+}

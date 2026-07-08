@@ -25,6 +25,22 @@ class ExamScorePage extends ConsumerWidget {
   }
 }
 
+Widget _errorWidget(BuildContext context, Object e) {
+  final cs = Theme.of(context).colorScheme;
+  return Center(
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.error_outline, size: 48, color: cs.error),
+        const SizedBox(height: 12),
+        Text('加载失败', style: TextStyle(fontSize: 16, color: cs.error)),
+        Text('$e', textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: cs.outline)),
+      ]),
+    ),
+  );
+}
+
 // ── 考试 Tab ──
 class _ExamTab extends ConsumerWidget {
   const _ExamTab();
@@ -36,7 +52,7 @@ class _ExamTab extends ConsumerWidget {
 
     return asyncExams.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载失败\n$e', style: TextStyle(color: cs.error))),
+      error: (e, _) => _errorWidget(context, e),
       data: (exams) => exams.isEmpty
           ? Center(child: Text('暂无考试', style: TextStyle(color: cs.outline)))
           : ListView.builder(
@@ -123,7 +139,7 @@ class _ScoreTab extends ConsumerWidget {
 
     return asyncScores.when(
       loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('加载失败\n$e', style: TextStyle(color: cs.error))),
+      error: (e, _) => _errorWidget(context, e),
       data: (scores) {
         if (scores.isEmpty) return Center(child: Text('暂无成绩', style: TextStyle(color: cs.outline)));
         final totalCredit = scores.fold<double>(0, (s, r) => s + r.credit);

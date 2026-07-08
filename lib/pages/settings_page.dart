@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers/data_providers.dart';
 import '../providers/semester_provider.dart';
 import '../providers/reminder_provider.dart';
+import '../services/cache_service.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -65,14 +67,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const Divider(),
           const _Header('数据'),
           ListTile(
-            leading: const Icon(Icons.file_download_outlined),
-            title: const Text('导出数据'),
-            onTap: () {},
-          ),
-          ListTile(
-            leading: const Icon(Icons.file_upload_outlined),
-            title: const Text('导入数据'),
-            onTap: () {},
+            leading: const Icon(Icons.refresh),
+            title: const Text('刷新缓存'),
+            subtitle: const Text('清除本地缓存并重新加载数据'),
+            onTap: () async {
+              await CacheService.clearAll();
+              ref.invalidate(timetableProvider);
+              ref.invalidate(examsProvider);
+              ref.invalidate(gradesProvider);
+              ref.invalidate(electricityProvider);
+            },
           ),
           ListTile(
             leading: const Icon(Icons.delete_outline, color: Colors.red),

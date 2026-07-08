@@ -161,7 +161,21 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
       body: asyncCourses.isLoading
           ? const Center(child: CircularProgressIndicator())
           : asyncCourses.hasError
-              ? Center(child: Text('加载失败\n${asyncCourses.error}', textAlign: TextAlign.center, style: TextStyle(color: cs.error)))
+              ? Center(child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.error_outline, size: 48, color: cs.error),
+                      const SizedBox(height: 12),
+                      Text('加载失败', style: TextStyle(fontSize: 16, color: cs.error)),
+                      Text('${asyncCourses.error}', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: cs.outline)),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        onPressed: () => ref.invalidate(timetableProvider),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('重试'),
+                      ),
+                    ]),
+                  ))
               : courses.isEmpty
                   ? Center(child: Text('暂无课表数据', style: TextStyle(color: cs.outline)))
                   : Column(

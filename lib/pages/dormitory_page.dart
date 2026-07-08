@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/auth_provider.dart';
 import '../providers/data_providers.dart';
 import '../services/api_service.dart';
+import '../widgets/toast.dart';
 
 class DormitoryPage extends ConsumerWidget {
   const DormitoryPage({super.key});
@@ -48,7 +49,29 @@ class DormitoryPage extends ConsumerWidget {
     if (asyncData.isLoading) {
       body = const Center(child: CircularProgressIndicator());
     } else if (asyncData.hasError) {
-      body = Center(child: Text('加载失败\n${asyncData.error}', style: TextStyle(color: cs.error)));
+      body = Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: cs.error),
+              const SizedBox(height: 12),
+              Text('加载失败', style: TextStyle(fontSize: 16, color: cs.error)),
+              const SizedBox(height: 4),
+              Text('${asyncData.error}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: cs.outline)),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () => ref.invalidate(electricityProvider),
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      );
     } else {
       final data = asyncData.asData?.value;
       if (data == null) {
@@ -243,14 +266,12 @@ class DormitoryPage extends ConsumerWidget {
     // Step 4: 绑定
     final bindR = await bindRooms(token, auth.username!, [roomCode]);
     if (bindR.isOk && context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('绑定成功')));
+      Toast.success(context, '绑定成功');
       ref.invalidate(electricityProvider);
     }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('操作失败: $e')));
+        Toast.error(context, '操作失败: $e');
       }
     }
   }
@@ -276,8 +297,7 @@ class DormitoryPage extends ConsumerWidget {
     if (!context.mounted) return;
 
     if (bound.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('暂无已绑定房间')));
+      Toast.info(context, '暂无已绑定房间');
       return;
     }
 

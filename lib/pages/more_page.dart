@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../providers/auth_provider.dart';
 import '../services/notification_service.dart';
+import '../widgets/toast.dart';
 import 'library_page.dart';
 
 class MorePage extends ConsumerWidget {
@@ -39,9 +40,7 @@ class MorePage extends ConsumerWidget {
             onTap: () async {
               await showTestNotification();
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('通知已弹出，请查看通知栏')),
-                );
+                Toast.success(context, '通知已弹出，请查看通知栏');
               }
             },
           ),
