@@ -7,6 +7,40 @@ final dio = Dio(BaseOptions(
   validateStatus: (s) => s != null && s < 600,
 ));
 
+// ── 请求冷却（同 URL+data 5s 内拦截重复请求） ──
+final _lastRequest = <String, DateTime>{};
+const _coolDown = Duration(seconds: 5);
+
+bool _checkCooldown(String key) {
+  final last = _lastRequest[key];
+  if (last != null && DateTime.now().difference(last) < _coolDown) {
+    return false;
+  }
+  _lastRequest[key] = DateTime.now();
+  return true;
+}
+
+void _setupCooldownInterceptor() {
+  dio.interceptors.add(InterceptorsWrapper(
+    onRequest: (options, handler) {
+      final key = '${options.method}:${options.path}:${options.data}';
+      if (!_checkCooldown(key)) {
+        return handler.reject(DioException(
+          requestOptions: options,
+          type: DioExceptionType.cancel,
+          message: '请求冷却中，请稍后再试',
+        ));
+      }
+      return handler.next(options);
+    },
+  ));
+}
+
+// 初始化冷却拦截器
+void _initDio() {
+  _setupCooldownInterceptor();
+}
+
 // ── 错误处理 ──
 class ApiException implements Exception {
   final String message;
@@ -20,6 +54,9 @@ class ApiException implements Exception {
 ApiException handleError(dynamic e) {
   if (e is ApiException) return e;
   if (e is DioException) {
+    if (e.type == DioExceptionType.cancel) {
+      return const ApiException('操作太频繁，请稍后再试');
+    }
     final code = e.response?.statusCode;
     final apiMsg = _apiErrorMessage(e.response?.data);
     if (apiMsg != null) return ApiException(apiMsg, statusCode: code);
@@ -76,11 +113,17 @@ Future<void> setApiServer(String host) async {
   dio.options.baseUrl = _server;
 }
 
+bool _dioReady = false;
+
 Future<String> loadApiServer() async {
   final sp = await SharedPreferences.getInstance();
   _server =
       _normalizeHost(sp.getString('api_server') ?? const String.fromEnvironment('API_SERVER'));
   dio.options.baseUrl = _server;
+  if (!_dioReady) {
+    _initDio();
+    _dioReady = true;
+  }
   return _server;
 }
 
