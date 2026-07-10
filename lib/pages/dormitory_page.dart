@@ -10,7 +10,9 @@ class DormitoryPage extends ConsumerWidget {
   const DormitoryPage({super.key});
 
   void _showElectricityLogin(BuildContext context, WidgetRef ref) {
-    final userCtrl = TextEditingController(text: ref.read(authProvider).username ?? '');
+    final userCtrl = TextEditingController(
+      text: ref.read(authProvider).username ?? '',
+    );
     final passCtrl = TextEditingController();
     showDialog(
       context: context,
@@ -19,16 +21,34 @@ class DormitoryPage extends ConsumerWidget {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: userCtrl, decoration: const InputDecoration(labelText: '电费账号', border: OutlineInputBorder())),
+            TextField(
+              controller: userCtrl,
+              decoration: const InputDecoration(
+                labelText: '电费账号',
+                border: OutlineInputBorder(),
+              ),
+            ),
             const SizedBox(height: 12),
-            TextField(controller: passCtrl, obscureText: true, decoration: const InputDecoration(labelText: '电费密码', border: OutlineInputBorder())),
+            TextField(
+              controller: passCtrl,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: '电费密码',
+                border: OutlineInputBorder(),
+              ),
+            ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
           FilledButton(
             onPressed: () async {
-              final ok = await ref.read(authProvider.notifier).doElectricityLogin(userCtrl.text.trim(), passCtrl.text);
+              final ok = await ref
+                  .read(authProvider.notifier)
+                  .doElectricityLogin(userCtrl.text.trim(), passCtrl.text);
               if (ctx.mounted) Navigator.pop(ctx);
               if (ok) ref.invalidate(electricityProvider);
             },
@@ -45,241 +65,712 @@ class DormitoryPage extends ConsumerWidget {
     final auth = ref.watch(authProvider);
     final asyncData = ref.watch(electricityProvider);
 
-    Widget body;
-    if (asyncData.isLoading) {
-      body = const Center(child: CircularProgressIndicator());
-    } else if (asyncData.hasError) {
-      body = Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.error_outline, size: 48, color: cs.error),
-              const SizedBox(height: 12),
-              Text('加载失败', style: TextStyle(fontSize: 16, color: cs.error)),
-              const SizedBox(height: 4),
-              Text('${asyncData.error}',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: cs.outline)),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: () => ref.invalidate(electricityProvider),
-                icon: const Icon(Icons.refresh),
-                label: const Text('重试'),
+    final body = asyncData.when(
+      loading: () => Center(child: _loading(cs)),
+      error: (error, _) => _errorState(context, ref, error, cs),
+      data: (data) => data == null
+          ? _emptyState(
+              context,
+              ref,
+              auth.isLoggedIn,
+              auth.electricityToken != null,
+              cs,
+            )
+          : _dataView(context, ref, data, cs),
+    );
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('宿舍电费'),
+        automaticallyImplyLeading: false,
+      ),
+      body: body,
+    );
+  }
+
+  Widget _loading(ColorScheme cs) => Container(
+    width: 64,
+    height: 64,
+    decoration: BoxDecoration(
+      color: cs.primaryContainer.withAlpha(60),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Center(
+      child: CircularProgressIndicator(color: cs.primary, strokeWidth: 3),
+    ),
+  );
+
+  Widget _errorState(
+    BuildContext context,
+    WidgetRef ref,
+    Object error,
+    ColorScheme cs,
+  ) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 48, color: cs.error),
+          const SizedBox(height: 12),
+          Text('加载失败', style: TextStyle(fontSize: 16, color: cs.error)),
+          const SizedBox(height: 4),
+          Text(
+            '$error',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.tonalIcon(
+            onPressed: () => ref.invalidate(electricityProvider),
+            icon: const Icon(Icons.refresh),
+            label: const Text('重试'),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _emptyState(
+    BuildContext context,
+    WidgetRef ref,
+    bool jwxtLoggedIn,
+    bool electricityLoggedIn,
+    ColorScheme cs,
+  ) {
+    final title = !jwxtLoggedIn
+        ? '未登录'
+        : !electricityLoggedIn
+        ? '电费未登录'
+        : '未绑定房间';
+    final subtitle = !jwxtLoggedIn
+        ? '请先在「更多」中登录教务系统'
+        : !electricityLoggedIn
+        ? '登录后查看宿舍电费余额'
+        : '绑定宿舍房间后查看电费';
+    final action = !jwxtLoggedIn
+        ? null
+        : !electricityLoggedIn
+        ? () => _showElectricityLogin(context, ref)
+        : () => _bindRoom(context, ref);
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(24, 80, 24, 0),
+        padding: const EdgeInsets.all(40),
+        decoration: BoxDecoration(
+          color: cs.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: cs.outlineVariant.withAlpha(40)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: cs.primaryContainer,
+                borderRadius: BorderRadius.circular(16),
               ),
+              child: Icon(
+                Icons.electrical_services_outlined,
+                size: 36,
+                color: cs.primary,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+            ),
+            if (action != null) ...[
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: action,
+                  icon: Icon(
+                    electricityLoggedIn ? Icons.add_home_outlined : Icons.login,
+                  ),
+                  label: Text(electricityLoggedIn ? '绑定房间' : '登录电费'),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _dataView(
+    BuildContext context,
+    WidgetRef ref,
+    ElectricityData data,
+    ColorScheme cs,
+  ) => ListView(
+    padding: const EdgeInsets.only(bottom: 32),
+    children: [
+      _roomCard(context, ref, data.roomName, cs),
+      const SizedBox(height: 12),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: _balanceCard('空调', data.acBalance, Icons.ac_unit, cs),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _balanceCard(
+                '照明',
+                data.lightBalance,
+                Icons.lightbulb_outline,
+                cs,
+              ),
+            ),
+          ],
+        ),
+      ),
+      if (data.lastMonthUsage != null && data.currentMonthUsage != null) ...[
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            '月度用电对比',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: cs.onSurface,
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: _statCard(
+                  '上月',
+                  '${data.lastMonthUsage!.toStringAsFixed(1)} 度',
+                  Icons.calendar_today,
+                  cs,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _statCard(
+                  '本月',
+                  '${data.currentMonthUsage!.toStringAsFixed(1)} 度',
+                  Icons.calendar_month,
+                  cs,
+                ),
+              ),
+              if (data.usageChange != null) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _statCard(
+                    '变化',
+                    '${data.usageChange! >= 0 ? '+' : ''}${data.usageChange!.toStringAsFixed(1)} 度',
+                    data.usageChange! >= 0
+                        ? Icons.trending_up
+                        : Icons.trending_down,
+                    cs,
+                    change: data.usageChange,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
-      );
-    } else {
-      final data = asyncData.asData?.value;
-      if (data == null) {
-        body = Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
+      ],
+      const SizedBox(height: 12),
+      _calendarEntry(context, ref, cs),
+      if (data.recharges.isNotEmpty)
+        _recordCard(context, '充值记录', data.recharges.take(3).toList(), true, cs),
+      if (data.deductions.isNotEmpty)
+        _recordCard(
+          context,
+          '扣费记录',
+          data.deductions.take(3).toList(),
+          false,
+          cs,
+        ),
+    ],
+  );
+
+  Widget _roomCard(
+    BuildContext context,
+    WidgetRef ref,
+    String? roomName,
+    ColorScheme cs,
+  ) {
+    final bound = roomName != null;
+    final card = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [cs.primaryContainer, cs.surface]),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: cs.primary.withAlpha(30),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              bound ? Icons.home_outlined : Icons.add_home_outlined,
+              size: 22,
+              color: cs.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.electrical_services_outlined, size: 48, color: cs.outline),
-                const SizedBox(height: 12),
-                if (!auth.isLoggedIn)
-                  Text('请先在「更多」中登录教务系统', style: TextStyle(color: cs.outline))
-                else if (auth.electricityToken == null) ...[
-                  Text('电费未登录', style: TextStyle(color: cs.outline, fontSize: 16)),
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    onPressed: () => _showElectricityLogin(context, ref),
-                    icon: const Icon(Icons.login),
-                    label: const Text('登录电费'),
+                Text(
+                  bound ? roomName.replaceAll('->', ' · ') : '点击绑定房间',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurface,
                   ),
-                ] else ...[
-                  Text('没有绑定房间', style: TextStyle(color: cs.outline, fontSize: 16)),
-                  const SizedBox(height: 8),
-                  Text('请绑定房间后查看电费', style: TextStyle(fontSize: 12, color: cs.outline)),
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    onPressed: () => _bindRoom(context, ref),
-                    icon: const Icon(Icons.add_home, size: 16),
-                    label: const Text('绑定房间'),
-                  ),
-                ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  bound ? '宿舍房间' : '绑定后查看电费余额',
+                  style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+                ),
               ],
             ),
           ),
-        );
-      } else {
-        body = ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (data.roomName != null) ...[
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(data.roomName!.replaceAll('->', ' · '),
-                    textAlign: TextAlign.center, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: cs.onSurface)),
+          if (bound)
+            TextButton.icon(
+              onPressed: () => _unbindRoom(context, ref),
+              icon: Icon(Icons.link_off, size: 16, color: cs.error),
+              label: Text(
+                '解绑',
+                style: TextStyle(fontSize: 12, color: cs.error),
               ),
-              Center(
-                child: TextButton.icon(
-                  onPressed: () => _unbindRoom(context, ref),
-                  icon: const Icon(Icons.link_off, size: 16),
-                  label: const Text('解绑房间', style: TextStyle(fontSize: 12)),
-                  style: TextButton.styleFrom(foregroundColor: cs.error),
-                ),
+            )
+          else
+            Icon(Icons.chevron_right, color: cs.outline),
+        ],
+      ),
+    );
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: bound
+          ? card
+          : Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _bindRoom(context, ref),
+                child: card,
               ),
-              const SizedBox(height: 8),
-            ] else ...[
-              Center(
-                child: OutlinedButton.icon(
-                  onPressed: () => _bindRoom(context, ref),
-                  icon: const Icon(Icons.add_home, size: 16),
-                  label: const Text('绑定房间'),
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            // 空调 / 照明并列
-            Row(children: [
-              Expanded(child: _balanceCard('空调', data.acBalance, Icons.ac_unit, cs)),
-              const SizedBox(width: 12),
-              Expanded(child: _balanceCard('照明', data.lightBalance, Icons.lightbulb_outline, cs)),
-            ]),
-            // 月度对比
-            if (data.lastMonthUsage != null && data.currentMonthUsage != null) ...[
-              const SizedBox(height: 20),
-              Text('月度用电对比', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
-              const SizedBox(height: 8),
-              Row(children: [
-                Expanded(child: _statCard('上月', '${data.lastMonthUsage!.toStringAsFixed(1)} 度', Icons.calendar_today, cs)),
-                const SizedBox(width: 10),
-                Expanded(child: _statCard('本月', '${data.currentMonthUsage!.toStringAsFixed(1)} 度', Icons.calendar_month, cs)),
-                if (data.usageChange != null) ...[
-                  const SizedBox(width: 10),
-                  Expanded(child: _statCard('变化', '${data.usageChange! >= 0 ? "+" : ""}${data.usageChange!.toStringAsFixed(1)} 度', Icons.swap_vert, cs)),
-                ],
-              ]),
-            ],
-            // 用电日历
-            const SizedBox(height: 20),
-            OutlinedButton.icon(
-              onPressed: () => _showConsumeCalendar(context, ref),
-              icon: const Icon(Icons.calendar_month, size: 16),
-              label: const Text('查看本月用电日历'),
             ),
-            // 充值记录
-            if (data.recharges.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text('充值记录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
-              const SizedBox(height: 8),
-              ...data.recharges.take(5).map((r) => ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.add_circle, color: Colors.green, size: 20),
-                    title: Text('¥${r.amount.toStringAsFixed(2)}',
-                        style: const TextStyle(fontWeight: FontWeight.w500)),
-                    subtitle: Text(r.time, style: const TextStyle(fontSize: 11)),
-                    trailing: r.label.isNotEmpty ? Text(r.label, style: TextStyle(fontSize: 11, color: cs.outline)) : null,
-                  )),
-            ],
-            // 扣费记录
-            if (data.deductions.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text('扣费记录', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
-              const SizedBox(height: 8),
-              ...data.deductions.take(5).map((r) => ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.remove_circle, color: Colors.red, size: 20),
-                    title: Text('¥${r.amount.toStringAsFixed(2)}',
-                        style: const TextStyle(fontWeight: FontWeight.w500)),
-                    subtitle: Text(r.time, style: const TextStyle(fontSize: 11)),
-                    trailing: r.label.isNotEmpty ? Text(r.label, style: TextStyle(fontSize: 11, color: cs.outline)) : null,
-                  )),
-            ],
-          ],
-        );
-      }
-    }
-
-    return Scaffold(appBar: AppBar(title: const Text('宿舍电费')), body: body);
+    );
   }
+
+  Widget _balanceCard(
+    String label,
+    double amount,
+    IconData icon,
+    ColorScheme cs,
+  ) {
+    final color = amount >= 50
+        ? cs.primary
+        : amount >= 20
+        ? cs.tertiary
+        : cs.error;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(60)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 24, color: color),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: 2),
+          Row(
+            children: [
+              Text(
+                '¥${amount.toStringAsFixed(2)}',
+                style: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+              if (amount < 20) ...[
+                const SizedBox(width: 4),
+                Icon(Icons.warning_amber_rounded, size: 14, color: cs.error),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              value: (amount / 100).clamp(0, 1),
+              minHeight: 3,
+              color: color,
+              backgroundColor: cs.surfaceContainerHighest,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statCard(
+    String label,
+    String value,
+    IconData icon,
+    ColorScheme cs, {
+    double? change,
+  }) {
+    final valueColor = change == null
+        ? cs.onSurface
+        : change >= 0
+        ? cs.error
+        : cs.primary;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withAlpha(60),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: valueColor),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: valueColor,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _calendarEntry(BuildContext context, WidgetRef ref, ColorScheme cs) =>
+      Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            splashColor: cs.primaryContainer.withAlpha(60),
+            onTap: () => _showConsumeCalendar(context, ref),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: cs.primaryContainer.withAlpha(60),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.calendar_month, size: 24, color: cs.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '本月用电日历',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                        Text(
+                          '查看每日用电详情',
+                          style: TextStyle(fontSize: 11, color: cs.outline),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: cs.outline),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _recordCard(
+    BuildContext context,
+    String title,
+    List<ElecRecord> records,
+    bool recharge,
+    ColorScheme cs,
+  ) {
+    final color = recharge ? cs.primary : cs.error;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cs.outlineVariant.withAlpha(40)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(
+                recharge ? Icons.add_circle : Icons.remove_circle,
+                color: color,
+                size: 18,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '共 ${records.length} 条',
+                style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+              ),
+            ],
+          ),
+          for (final record in records) _recordRow(record, recharge, cs),
+          TextButton(
+            onPressed: () => Toast.info(context, '更多记录功能开发中'),
+            child: const Text('查看全部'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _recordRow(ElecRecord record, bool recharge, ColorScheme cs) {
+    final color = recharge ? cs.primary : cs.error;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: color.withAlpha(20),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              recharge ? Icons.add : Icons.remove,
+              size: 18,
+              color: color,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${recharge ? '+' : '-'}¥${record.amount.toStringAsFixed(2)}',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: color),
+                ),
+                Text(
+                  record.time,
+                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          if (record.label.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                record.label,
+                style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>?> _selectOption(
+    BuildContext context,
+    String title,
+    List<Map<String, dynamic>> options, {
+    String? displayKey,
+  }) => showModalBottomSheet<Map<String, dynamic>>(
+    context: context,
+    useSafeArea: true,
+    builder: (sheetContext) {
+      final cs = Theme.of(sheetContext).colorScheme;
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 10),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: cs.outlineVariant,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: options.length,
+                itemBuilder: (_, index) {
+                  final option = options[index];
+                  final name =
+                      option[displayKey ?? 'name'] as String? ??
+                      option['name'] as String? ??
+                      option['roomName'] as String? ??
+                      option['areaInfo'] as String? ??
+                      option['roomCode'] as String? ??
+                      '';
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      splashColor: cs.primaryContainer,
+                      onTap: () => Navigator.pop(sheetContext, option),
+                      child: SizedBox(
+                        height: 56,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              name,
+                              style: TextStyle(color: cs.onSurface),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 
   Future<void> _bindRoom(BuildContext context, WidgetRef ref) async {
     final auth = ref.read(authProvider);
     final token = auth.electricityToken;
     if (token == null || auth.username == null) return;
-
     try {
-    // Step 1: 选楼栋
-    final buildingsR = await fetchBuildings(token);
-    if (!buildingsR.isOk || buildingsR.data == null) return;
-    final buildings = (buildingsR.data as List).cast<Map<String, dynamic>>();
-    if (!context.mounted) return;
-
-    final building = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('选择楼栋'),
-        children: buildings
-            .map((b) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, b),
-                  child: Text(b['name'] as String? ?? ''),
-                ))
-            .toList(),
-      ),
-    );
-    if (building == null || !context.mounted) return;
-    final buildingCode = building['code'] as String? ?? '';
-
-    // Step 2: 选楼层
-    final floorsR = await fetchFloors(token, buildingCode);
-    if (!floorsR.isOk || floorsR.data == null) return;
-    final floors = (floorsR.data as List).cast<Map<String, dynamic>>();
-    if (!context.mounted) return;
-
-    final floor = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('选择楼层'),
-        children: floors
-            .map((f) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, f),
-                  child: Text(f['name'] as String? ?? ''),
-                ))
-            .toList(),
-      ),
-    );
-    if (floor == null || !context.mounted) return;
-    final floorCode = floor['code'] as String? ?? '';
-
-    // Step 3: 选房间
-    final roomsR = await searchRooms(token, floorCode, auth.username!);
-    if (!roomsR.isOk || roomsR.data == null) return;
-    final rooms = (roomsR.data as List).cast<Map<String, dynamic>>();
-    if (!context.mounted) return;
-
-    final room = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('选择房间'),
-        children: rooms
-            .map((r) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, r),
-                  child: Text(r['name'] as String? ?? ''),
-                ))
-            .toList(),
-      ),
-    );
-    if (room == null || !context.mounted) return;
-    final roomCode = room['code'] as String? ?? '';
-
-    // Step 4: 绑定
-    final bindR = await bindRooms(token, auth.username!, [roomCode]);
-    if (bindR.isOk && context.mounted) {
-      Toast.operationSuccess(context, '绑定');
-      ref.invalidate(electricityProvider);
-    }
-    } catch (e) {
-      if (context.mounted) {
-        Toast.operationFailed(context, '$e');
+      final buildingsR = await fetchBuildings(token);
+      if (!buildingsR.isOk || buildingsR.data == null) return;
+      if (!context.mounted) return;
+      final building = await _selectOption(
+        context,
+        '选择楼栋',
+        (buildingsR.data as List).cast<Map<String, dynamic>>(),
+      );
+      if (building == null || !context.mounted) return;
+      final floorsR = await fetchFloors(
+        token,
+        building['code'] as String? ?? '',
+      );
+      if (!floorsR.isOk || floorsR.data == null) return;
+      if (!context.mounted) return;
+      final floor = await _selectOption(
+        context,
+        '选择楼层',
+        (floorsR.data as List).cast<Map<String, dynamic>>(),
+      );
+      if (floor == null || !context.mounted) return;
+      final roomsR = await searchRooms(
+        token,
+        floor['code'] as String? ?? '',
+        auth.username!,
+      );
+      if (!roomsR.isOk || roomsR.data == null) return;
+      if (!context.mounted) return;
+      final room = await _selectOption(
+        context,
+        '选择房间',
+        (roomsR.data as List).cast<Map<String, dynamic>>(),
+      );
+      if (room == null || !context.mounted) return;
+      final bindR = await bindRooms(token, auth.username!, [
+        room['code'] as String? ?? '',
+      ]);
+      if (bindR.isOk && context.mounted) {
+        Toast.operationSuccess(context, '绑定');
+        ref.invalidate(electricityProvider);
       }
+    } catch (e) {
+      if (context.mounted) Toast.operationFailed(context, '$e');
     }
   }
 
@@ -287,63 +778,41 @@ class DormitoryPage extends ConsumerWidget {
     final auth = ref.read(authProvider);
     final token = auth.electricityToken;
     if (token == null || auth.username == null) return;
-
     try {
-    // 查询已绑定房间
-    final boundR = await fetchBoundRooms(token, auth.username!);
-    if (!boundR.isOk || boundR.data == null) return;
-    final raw = boundR.data;
-    List<Map<String, dynamic>> bound;
-    if (raw is List) {
-      bound = raw.cast<Map<String, dynamic>>();
-    } else if (raw is Map) {
-      bound = ((raw['records'] ?? raw['list'] ?? raw['data'] ?? raw['items']) as List?)?.cast<Map<String, dynamic>>() ?? [];
-    } else {
-      bound = [];
-    }
-    if (!context.mounted) return;
-
-    if (bound.isEmpty) {
-      Toast.noData(context, '已绑定房间');
-      return;
-    }
-
-    final room = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('解绑房间'),
-        children: bound
-            .map((r) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, r),
-                  child: Text(r['roomName'] as String? ?? r['areaInfo'] as String? ?? r['roomCode'] as String? ?? ''),
-                ))
-            .toList(),
-      ),
-    );
-    if (room == null || !context.mounted) return;
-    final roomCode = room['roomCode'] as String? ?? '';
-
-    final unbindR = await unbindRooms(token, auth.username!, [roomCode]);
-    if (unbindR.isOk && context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('解绑成功')));
-      ref.invalidate(electricityProvider);
-    }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('操作失败: $e')));
+      final boundR = await fetchBoundRooms(token, auth.username!);
+      if (!boundR.isOk || boundR.data == null) return;
+      final raw = boundR.data;
+      final bound = raw is List
+          ? raw.cast<Map<String, dynamic>>()
+          : raw is Map
+          ? ((raw['records'] ?? raw['list'] ?? raw['data'] ?? raw['items'])
+                        as List?)
+                    ?.cast<Map<String, dynamic>>() ??
+                []
+          : <Map<String, dynamic>>[];
+      if (!context.mounted) return;
+      if (bound.isEmpty) {
+        Toast.noData(context, '已绑定房间');
+        return;
       }
+      final room = await _selectOption(context, '解绑房间', bound);
+      if (room == null || !context.mounted) return;
+      final unbindR = await unbindRooms(token, auth.username!, [
+        room['roomCode'] as String? ?? '',
+      ]);
+      if (unbindR.isOk && context.mounted) {
+        Toast.operationSuccess(context, '解绑');
+        ref.invalidate(electricityProvider);
+      }
+    } catch (e) {
+      if (context.mounted) Toast.operationFailed(context, '$e');
     }
   }
 
-  Future<void> _showConsumeCalendar(
-      BuildContext context, WidgetRef ref) async {
+  Future<void> _showConsumeCalendar(BuildContext context, WidgetRef ref) async {
     final auth = ref.read(authProvider);
     final token = auth.electricityToken;
     if (token == null || auth.username == null) return;
-
-    // 拿 roomCode
     String? roomCode;
     try {
       final roomsR = await fetchElectricityRooms(token);
@@ -356,7 +825,7 @@ class DormitoryPage extends ConsumerWidget {
         if (context.mounted) Toast.serverError(context);
         return;
       }
-    } catch (e) {
+    } catch (_) {
       if (context.mounted) Toast.networkError(context);
       return;
     }
@@ -368,12 +837,10 @@ class DormitoryPage extends ConsumerWidget {
     final lastDay = DateTime(now.year, now.month + 1, 0).day;
     final start = '${now.year}-${now.month.toString().padLeft(2, '0')}-01';
     final end = '${now.year}-${now.month.toString().padLeft(2, '0')}-$lastDay';
-
     List<Map<String, dynamic>> days = [];
     try {
       final cr = await fetchElectricityConsume(token, roomCode, start, end);
       if (cr.isOk && cr.data != null) {
-        // Try various possible keys
         var raw = cr.data!['useEleByDayList'];
         raw ??= cr.data!['list'];
         raw ??= cr.data!['records'];
@@ -386,23 +853,15 @@ class DormitoryPage extends ConsumerWidget {
       Toast.info(context, '本月暂无用电数据');
       return;
     }
-
     if (!context.mounted) return;
-
-    // 建 day→value 映射
     final dayMap = <int, double>{};
-    for (final d in days) {
-      // date 格式 "2026-07-01" → 提取日
-      final dateStr = d['date'] as String? ?? '';
-      final dayInt = int.tryParse(dateStr.split('-').last) ?? 0;
-      final raw = d['useElectric'];
-      final double val = raw is num ? raw.toDouble() : 0.0;
-      if (dayInt > 0) dayMap[dayInt] = val;
+    for (final day in days) {
+      final dayInt =
+          int.tryParse((day['date'] as String? ?? '').split('-').last) ?? 0;
+      final raw = day['useElectric'];
+      if (dayInt > 0) dayMap[dayInt] = raw is num ? raw.toDouble() : 0;
     }
-
-    if (!context.mounted) return;
     final cs = Theme.of(context).colorScheme;
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -413,43 +872,59 @@ class DormitoryPage extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 40, height: 4,
+              width: 44,
+              height: 4,
               decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2)),
+                color: cs.outlineVariant,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
             const SizedBox(height: 12),
-            Text('${now.year}年${now.month}月用电日历',
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600)),
+            Text(
+              '${now.year}年${now.month}月用电日历',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: cs.onSurface,
+              ),
+            ),
             const SizedBox(height: 16),
-            // 星期头
             Row(
               children: ['一', '二', '三', '四', '五', '六', '日']
-                  .map((s) => Expanded(
-                        child: Text(s,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                                fontSize: 12, color: cs.outline)),
-                      ))
+                  .map(
+                    (day) => Expanded(
+                      child: Text(
+                        day,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12, color: cs.outline),
+                      ),
+                    ),
+                  )
                   .toList(),
             ),
             const SizedBox(height: 4),
-            // 日期格子
             _buildMonthGrid(now.year, now.month, dayMap, cs),
             const SizedBox(height: 12),
-            const SizedBox(height: 12),
-            // 详情统计
             _buildDetailSummary(dayMap, cs),
             const SizedBox(height: 12),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Container(width: 10, height: 10,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 10,
+                  height: 10,
                   decoration: BoxDecoration(
-                      color: cs.primary.withAlpha(80),
-                      borderRadius: BorderRadius.circular(2))),
-              const SizedBox(width: 6),
-              Text('用电量越深越多', style: TextStyle(fontSize: 11, color: cs.outline)),
-            ]),
+                    color: cs.primary.withAlpha(120),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '用电量越深越多',
+                  style: TextStyle(fontSize: 11, color: cs.outline),
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
           ],
         ),
@@ -457,119 +932,144 @@ class DormitoryPage extends ConsumerWidget {
     );
   }
 
-  Widget _buildMonthGrid(int year, int month,
-      Map<int, double> dayMap, ColorScheme cs) {
+  Widget _buildMonthGrid(
+    int year,
+    int month,
+    Map<int, double> dayMap,
+    ColorScheme cs,
+  ) {
     final firstDay = DateTime(year, month, 1);
-    final lastDay = DateTime(year, month + 1, 0);
-    final startOffset = firstDay.weekday - 1; // Monday = 0
-    final totalDays = lastDay.day;
-    final maxVal = dayMap.isEmpty ? 1.0 : dayMap.values.reduce((a, b) => a > b ? a : b);
-
-    final cells = <Widget>[];
-    for (var i = 0; i < startOffset; i++) {
-      cells.add(const SizedBox());
-    }
-    for (var d = 1; d <= totalDays; d++) {
-      final val = dayMap[d] ?? 0;
-      final alpha = maxVal > 0 ? (val / maxVal * 200).clamp(0, 200).toInt() + 30 : 30;
+    final totalDays = DateTime(year, month + 1, 0).day;
+    final maxVal = dayMap.isEmpty
+        ? 1.0
+        : dayMap.values.reduce((a, b) => a > b ? a : b);
+    final today = DateTime.now();
+    final cells = <Widget>[
+      for (var i = 0; i < firstDay.weekday - 1; i++) const SizedBox(),
+    ];
+    for (var day = 1; day <= totalDays; day++) {
+      final value = dayMap[day] ?? 0;
+      final ratio = maxVal == 0 ? 0.0 : value / maxVal;
+      final alpha = ratio <= .33
+          ? 40
+          : ratio <= .66
+          ? 120
+          : 255;
+      final isToday =
+          today.year == year && today.month == month && today.day == day;
       cells.add(
         Container(
           margin: const EdgeInsets.all(1),
           decoration: BoxDecoration(
-            color: val > 0
+            color: value > 0
                 ? cs.primary.withAlpha(alpha)
-                : Colors.grey.withAlpha(20),
-            borderRadius: BorderRadius.circular(3),
+                : cs.surfaceContainerHighest.withAlpha(30),
+            borderRadius: BorderRadius.circular(6),
+            border: isToday ? Border.all(color: cs.primary, width: 1.5) : null,
           ),
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text('$d', style: TextStyle(fontSize: 11, fontWeight: val > 0 ? FontWeight.w600 : FontWeight.normal, color: val > 0 ? cs.onPrimary : cs.outline)),
-            if (val > 0) Text(val.toStringAsFixed(1), style: TextStyle(fontSize: 7, color: val > maxVal * 0.5 ? cs.onPrimary : cs.outline)),
-          ]),
+          child: Center(
+            child: Text(
+              '$day',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: value > 0 ? FontWeight.w600 : FontWeight.normal,
+                color: value > maxVal * .66 ? cs.onPrimary : cs.outline,
+              ),
+            ),
+          ),
         ),
       );
     }
-    // Pad to full rows
     while (cells.length % 7 != 0) {
       cells.add(const SizedBox());
     }
-
     return Column(
-      children: List.generate(cells.length ~/ 7, (row) {
-        return Row(
-          children: List.generate(7, (col) {
-            return Expanded(child: SizedBox(height: 40, child: cells[row * 7 + col]));
-          }),
-        );
-      }),
+      children: List.generate(
+        cells.length ~/ 7,
+        (row) => Row(
+          children: List.generate(
+            7,
+            (column) => Expanded(
+              child: SizedBox(height: 40, child: cells[row * 7 + column]),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
   Widget _buildDetailSummary(Map<int, double> dayMap, ColorScheme cs) {
-    if (dayMap.isEmpty) return const SizedBox.shrink();
-    final values = dayMap.values.where((v) => v > 0).toList();
+    final values = dayMap.values.where((value) => value > 0).toList();
     if (values.isEmpty) return const SizedBox.shrink();
-    final total = values.fold(0.0, (a, b) => a + b);
-    final avg = total / values.length;
+    final total = values.fold(0.0, (sum, value) => sum + value);
     final max = values.reduce((a, b) => a > b ? a : b);
     final min = values.reduce((a, b) => a < b ? a : b);
-    final maxDay = dayMap.entries.firstWhere((e) => e.value == max).key;
-    final minDay = dayMap.entries.firstWhere((e) => e.value == min).key;
-
+    final maxDay = dayMap.entries.firstWhere((entry) => entry.value == max).key;
+    final minDay = dayMap.entries.firstWhere((entry) => entry.value == min).key;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(children: [
-        Text('用电详情', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurface)),
-        const SizedBox(height: 8),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-          _detailItem('本月总计', '${total.toStringAsFixed(1)} 度', cs),
-          _detailItem('日均', '${avg.toStringAsFixed(1)} 度', cs),
-        ]),
-        const SizedBox(height: 4),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-          _detailItem('最高', '${max.toStringAsFixed(1)} 度\n$maxDay日', cs),
-          _detailItem('最低', '${min.toStringAsFixed(1)} 度\n$minDay日', cs),
-        ]),
-      ]),
-    );
-  }
-
-  Widget _detailItem(String label, String value, ColorScheme cs) => Column(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: 11, color: cs.outline)),
-          Text(value, textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: cs.onSurface)),
+          Row(
+            children: [
+              Icon(Icons.insights_outlined, size: 16, color: cs.primary),
+              const SizedBox(width: 6),
+              Text(
+                '用电详情',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _detailItem('本月总计', '${total.toStringAsFixed(1)} 度', null, cs),
+              _detailItem(
+                '日均',
+                '${(total / values.length).toStringAsFixed(1)} 度',
+                null,
+                cs,
+              ),
+              _detailItem('最高', '${max.toStringAsFixed(1)} 度', '$maxDay日', cs),
+              _detailItem('最低', '${min.toStringAsFixed(1)} 度', '$minDay日', cs),
+            ],
+          ),
         ],
-      );
-
-  Widget _balanceCard(String label, double amount, IconData icon, ColorScheme cs) {
-    final color = amount >= 50 ? Colors.green : (amount >= 20 ? Colors.orange : cs.error);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
-        child: Column(children: [
-          Icon(icon, size: 24, color: color),
-          const SizedBox(height: 6),
-          Text(label, style: TextStyle(fontSize: 12, color: cs.outline)),
-          const SizedBox(height: 4),
-          Text('¥${amount.toStringAsFixed(2)}',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: color)),
-        ]),
       ),
     );
   }
 
-  Widget _statCard(String label, String value, IconData icon, ColorScheme cs) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(color: cs.surfaceContainerHighest, borderRadius: BorderRadius.circular(10)),
-        child: Column(children: [
-          Icon(icon, size: 20, color: cs.primary),
-          const SizedBox(height: 6),
-          Text(value, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-          Text(label, style: TextStyle(fontSize: 11, color: cs.outline)),
-        ]),
-      );
+  Widget _detailItem(
+    String label,
+    String value,
+    String? date,
+    ColorScheme cs,
+  ) => Column(
+    children: [
+      Text(label, style: TextStyle(fontSize: 11, color: cs.outline)),
+      Text(
+        value,
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: cs.onSurface,
+        ),
+      ),
+      if (date != null)
+        Text(
+          '($date)',
+          style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+        ),
+    ],
+  );
 }
