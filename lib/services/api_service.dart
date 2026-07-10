@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/resource_item.dart';
+
 final dio = Dio(
   BaseOptions(
     connectTimeout: const Duration(seconds: 30),
@@ -461,4 +463,68 @@ ApiResponse<dynamic> _toResponseAny(Response r) {
     message: r.data['message'],
     data: r.data['data'],
   );
+}
+
+Future<List<LibraryCategory>> fetchLibraryCategories() async {
+  final response = _toResponseAny(await dio.get('/api/v1/library/categories'));
+  final items = (response.data as List<dynamic>? ?? []);
+  return items
+      .map(
+        (item) =>
+            LibraryCategory.fromJson(Map<String, dynamic>.from(item as Map)),
+      )
+      .toList();
+}
+
+Future<
+  ({
+    List<LibraryResource> items,
+    int total,
+    int page,
+    int pageSize,
+    int totalPages,
+  })
+>
+fetchLibraryResources({
+  int? categoryId,
+  String? query,
+  int page = 1,
+  int pageSize = 20,
+  String sort = 'newest',
+}) async {
+  final response = _toResponse(
+    await dio.get(
+      '/api/v1/library/resources',
+      queryParameters: {
+        'category_id': ?categoryId,
+        if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
+        'page': page,
+        'page_size': pageSize,
+        'sort': sort,
+      },
+    ),
+  );
+  final data = response.data ?? const <String, dynamic>{};
+  final rawItems = data['items'] as List<dynamic>? ?? [];
+  return (
+    items: rawItems
+        .map(
+          (item) =>
+              LibraryResource.fromJson(Map<String, dynamic>.from(item as Map)),
+        )
+        .toList(),
+    total: (data['total'] as num?)?.toInt() ?? 0,
+    page: (data['page'] as num?)?.toInt() ?? page,
+    pageSize: (data['page_size'] as num?)?.toInt() ?? pageSize,
+    totalPages: (data['total_pages'] as num?)?.toInt() ?? 0,
+  );
+}
+
+Future<LibraryResource> fetchLibraryResource(int id) async {
+  final response = _toResponse(await dio.get('/api/v1/library/resources/$id'));
+  return LibraryResource.fromJson(response.data!);
+}
+
+Future<void> recordLibraryDownload(int id) async {
+  await dio.post('/api/v1/library/resources/$id/download');
 }
