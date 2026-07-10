@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/exam.dart';
+import '../models/score.dart';
 import '../providers/data_providers.dart';
 import '../widgets/semester_selector.dart';
 
@@ -9,192 +11,661 @@ class ExamScorePage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final cs = Theme.of(context).colorScheme;
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: const Text('考试'),
           actions: const [SemesterSelector()],
-          bottom: const TabBar(tabs: [Tab(text: '考试'), Tab(text: '成绩')]),
+          bottom: TabBar(
+            labelColor: cs.primary,
+            unselectedLabelColor: cs.outline,
+            labelStyle: const TextStyle(fontWeight: FontWeight.w700),
+            unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
+            indicator: _RoundedUnderlineIndicator(cs.primary),
+            tabs: const [
+              Tab(text: '考试'),
+              Tab(text: '成绩'),
+            ],
+          ),
         ),
-        body: const TabBarView(
-          children: [_ExamTab(), _ScoreTab()],
+        body: const TabBarView(children: [_ExamTab(), _ScoreTab()]),
+      ),
+    );
+  }
+}
+
+Widget _loadingWidget(BuildContext context) {
+  final cs = Theme.of(context).colorScheme;
+  return Center(
+    child: Container(
+      width: 64,
+      height: 64,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: cs.primaryContainer.withAlpha(60),
+        shape: BoxShape.circle,
+      ),
+      child: CircularProgressIndicator(color: cs.primary, strokeWidth: 3),
+    ),
+  );
+}
+
+Widget _errorWidget(BuildContext context, Object error, VoidCallback onRetry) {
+  final cs = Theme.of(context).colorScheme;
+  return Center(
+    child: Container(
+      margin: const EdgeInsets.all(28),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 48, color: cs.error),
+          const SizedBox(height: 12),
+          Text('加载失败', style: TextStyle(fontSize: 16, color: cs.onSurface)),
+          const SizedBox(height: 4),
+          Text(
+            '$error',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.tonal(onPressed: onRetry, child: const Text('重试')),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ExamTab extends ConsumerWidget {
+  const _ExamTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final asyncExams = ref.watch(examsProvider);
+    return asyncExams.when(
+      loading: () => _loadingWidget(context),
+      error: (error, _) =>
+          _errorWidget(context, error, () => ref.invalidate(examsProvider)),
+      data: (exams) => _ExamList(exams: exams),
+    );
+  }
+}
+
+class _ExamList extends StatelessWidget {
+  final List<Exam> exams;
+  const _ExamList({required this.exams});
+
+  @override
+  Widget build(BuildContext context) {
+    final today = _dateOnly(DateTime.now());
+    final upcoming =
+        exams.where((exam) => !_dateOnly(exam.date).isBefore(today)).toList()
+          ..sort((a, b) => a.date.compareTo(b.date));
+    final past =
+        exams.where((exam) => _dateOnly(exam.date).isBefore(today)).toList()
+          ..sort((a, b) => b.date.compareTo(a.date));
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      children: [
+        _GroupHeader(title: '即将到来'),
+        if (upcoming.isEmpty)
+          _UpcomingEmpty()
+        else
+          ...upcoming.map(
+            (exam) => Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _ExamCard(exam: exam),
+            ),
+          ),
+        if (past.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          _GroupHeader(title: '已结束'),
+          ...past.map(
+            (exam) => Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _ExamCard(exam: exam),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ExamCard extends StatelessWidget {
+  final Exam exam;
+  const _ExamCard({required this.exam});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final today = _dateOnly(DateTime.now());
+    final date = _dateOnly(exam.date);
+    final days = date.difference(today).inDays;
+    final past = days < 0;
+    final isToday = days == 0;
+    final within3 = days > 0 && days <= 3;
+    final within7 = days > 3 && days <= 7;
+    final dateBackground = past || days > 7
+        ? cs.surfaceContainerHighest
+        : isToday
+        ? cs.primaryContainer
+        : within7
+        ? cs.tertiaryContainer
+        : cs.errorContainer;
+    final dateTextColor = isToday ? cs.onPrimaryContainer : cs.onSurfaceVariant;
+
+    return Stack(
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            color: cs.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: cs.outlineVariant.withAlpha(60)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 64,
+                padding: const EdgeInsets.symmetric(
+                  vertical: 12,
+                  horizontal: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: dateBackground,
+                  borderRadius: const BorderRadius.horizontal(
+                    left: Radius.circular(12),
+                  ),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _examDate(exam.date),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: dateTextColor,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _weekday(exam.date),
+                      style: TextStyle(fontSize: 10, color: cs.outline),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        exam.courseName,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: past ? cs.onSurfaceVariant : cs.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      _ExamInfo(
+                        icon: Icons.access_time,
+                        text:
+                            '${_time(exam.startTime)} - ${_time(exam.endTime)}',
+                      ),
+                      if (exam.location.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        _ExamInfo(
+                          icon: Icons.location_on_outlined,
+                          text: exam.location,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              if (past || isToday || within3 || within7)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _StatusPill(days: days),
+                ),
+            ],
+          ),
+        ),
+        if (!past && days <= 3)
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            child: Container(
+              width: 4,
+              decoration: BoxDecoration(
+                color: cs.error,
+                borderRadius: const BorderRadius.horizontal(
+                  left: Radius.circular(12),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  final int days;
+  const _StatusPill({required this.days});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final past = days < 0;
+    final today = days == 0;
+    final within3 = days <= 3;
+    final color = past
+        ? cs.surfaceContainerHighest
+        : today
+        ? cs.error
+        : within3
+        ? cs.tertiaryContainer
+        : cs.primaryContainer;
+    final textColor = past
+        ? cs.outline
+        : today
+        ? cs.onError
+        : within3
+        ? cs.onTertiaryContainer
+        : cs.onPrimaryContainer;
+    final label = past
+        ? '已结束'
+        : today
+        ? '今天'
+        : '$days天后';
+    return Container(
+      width: 24,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 3),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: RotatedBox(
+        quarterTurns: 3,
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: textColor,
+          ),
         ),
       ),
     );
   }
 }
 
-Widget _errorWidget(BuildContext context, Object e) {
-  final cs = Theme.of(context).colorScheme;
-  return Center(
-    child: Padding(
-      padding: const EdgeInsets.all(32),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.error_outline, size: 48, color: cs.error),
-        const SizedBox(height: 12),
-        Text('加载失败', style: TextStyle(fontSize: 16, color: cs.error)),
-        Text('$e', textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: cs.outline)),
-      ]),
-    ),
-  );
-}
-
-// ── 考试 Tab ──
-class _ExamTab extends ConsumerWidget {
-  const _ExamTab();
-
+class _ExamInfo extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _ExamInfo({required this.icon, required this.text});
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final asyncExams = ref.watch(examsProvider);
-
-    return asyncExams.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _errorWidget(context, e),
-      data: (exams) => exams.isEmpty
-          ? Center(child: Text('暂无考试', style: TextStyle(color: cs.outline)))
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: exams.length,
-              itemBuilder: (_, i) {
-                final e = exams[i];
-                final today = DateTime.now();
-                final days = DateTime(e.date.year, e.date.month, e.date.day)
-                    .difference(DateTime(today.year, today.month, today.day))
-                    .inDays;
-                final urgent = days >= 0 && days <= 3;
-                final soon = days >= 0 && days <= 7;
-                final past = days < 0;
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 52,
-                          child: Column(
-                            children: [
-                              Text('${e.date.month}月${e.date.day}日',
-                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                              const SizedBox(height: 4),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: past ? cs.surfaceContainerHighest : (urgent ? cs.error : (soon ? Colors.orange[100] : cs.surfaceContainerHighest)),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  past ? '已结束' : (days == 0 ? '今天' : '$days天后'),
-                                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600,
-                                      color: past ? cs.outline : (urgent ? cs.onError : (soon ? Colors.orange[800] : cs.outline))),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(e.courseName,
-                                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: past ? cs.outline : null)),
-                              const SizedBox(height: 4),
-                              _info(Icons.access_time,
-                                  '${e.startTime.hour.toString().padLeft(2, '0')}:${e.startTime.minute.toString().padLeft(2, '0')} - ${e.endTime.hour.toString().padLeft(2, '0')}:${e.endTime.minute.toString().padLeft(2, '0')}'),
-                              const SizedBox(height: 2),
-                              if (e.location.isNotEmpty) _info(Icons.location_on_outlined, e.location),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: cs.outline),
+        const SizedBox(width: 5),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
-
-  Widget _info(IconData icon, String text) => Row(
-        children: [
-          Icon(icon, size: 14, color: Colors.grey[500]),
-          const SizedBox(width: 4),
-          Text(text, style: TextStyle(fontSize: 13, color: Colors.grey[700])),
-        ],
-      );
 }
 
-// ── 成绩 Tab ──
+class _GroupHeader extends StatelessWidget {
+  final String title;
+  const _GroupHeader({required this.title});
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Container(width: 18, height: 2, color: cs.outline),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 12,
+            color: cs.outline,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _UpcomingEmpty extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
+        children: [
+          Icon(Icons.event_available_outlined, size: 64, color: cs.outline),
+          const SizedBox(height: 12),
+          Text('本学期暂无考试，安心学习', style: TextStyle(color: cs.onSurfaceVariant)),
+        ],
+      ),
+    );
+  }
+}
+
 class _ScoreTab extends ConsumerWidget {
   const _ScoreTab();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final cs = Theme.of(context).colorScheme;
     final asyncScores = ref.watch(gradesProvider);
-
     return asyncScores.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _errorWidget(context, e),
-      data: (scores) {
-        if (scores.isEmpty) return Center(child: Text('暂无成绩', style: TextStyle(color: cs.outline)));
-        final totalCredit = scores.fold<double>(0, (s, r) => s + r.credit);
-        final weighted = scores.fold<double>(0, (s, r) => s + r.gpaPoint * r.credit);
-        final gpa = totalCredit > 0 ? weighted / totalCredit : 0.0;
-
-        return Column(
-          children: [
-            Container(
-              margin: const EdgeInsets.all(12),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-              decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(12)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _stat('总学分', totalCredit.toStringAsFixed(0)),
-                  _stat('加权绩点', gpa.toStringAsFixed(2)),
-                  _stat('课程数', '${scores.length}'),
-                ],
-              ),
-            ),
-            Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                itemCount: scores.length,
-                separatorBuilder: (_, _) => const Divider(height: 1),
-                itemBuilder: (_, i) {
-                  final r = scores[i];
-                  return ListTile(
-                    title: Text(r.courseName, style: const TextStyle(fontWeight: FontWeight.w500)),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(r.gradeText.isNotEmpty ? r.gradeText : '${r.score.toStringAsFixed(0)}分',
-                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                        const SizedBox(width: 12),
-                        SizedBox(width: 36,
-                            child: Text('绩点 ${r.gpaPoint.toStringAsFixed(1)}',
-                                style: TextStyle(fontSize: 12, color: Colors.grey[600]))),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
-        );
-      },
+      loading: () => _loadingWidget(context),
+      error: (error, _) =>
+          _errorWidget(context, error, () => ref.invalidate(gradesProvider)),
+      data: (scores) =>
+          scores.isEmpty ? const _ScoresEmpty() : _ScoresView(scores: scores),
     );
   }
-
-  Widget _stat(String label, String value) => Column(
-        children: [
-          Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-        ],
-      );
 }
+
+class _ScoresView extends StatelessWidget {
+  final List<Score> scores;
+  const _ScoresView({required this.scores});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final totalCredit = scores.fold<double>(
+      0,
+      (sum, score) => sum + score.credit,
+    );
+    final weighted = scores.fold<double>(
+      0,
+      (sum, score) => sum + score.gpaPoint * score.credit,
+    );
+    final gpa = totalCredit > 0 ? weighted / totalCredit : 0.0;
+    final gpaColor = _gpaColor(cs, gpa);
+
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.all(12),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [cs.primaryContainer, cs.surfaceContainerHighest],
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: _Stat(
+                      label: '总学分',
+                      value: totalCredit.toStringAsFixed(1),
+                    ),
+                  ),
+                  _VerticalDivider(color: cs.outlineVariant.withAlpha(50)),
+                  Expanded(
+                    child: _Stat(
+                      label: '加权绩点',
+                      value: gpa.toStringAsFixed(2),
+                      color: gpaColor,
+                      prominent: true,
+                    ),
+                  ),
+                  _VerticalDivider(color: cs.outlineVariant.withAlpha(50)),
+                  Expanded(
+                    child: _Stat(label: '课程数', value: '${scores.length}'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: LinearProgressIndicator(
+                  value: (gpa / 5).clamp(0, 1),
+                  minHeight: 4,
+                  color: gpaColor,
+                  backgroundColor: cs.surface.withAlpha(120),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+            itemCount: scores.length,
+            separatorBuilder: (_, _) => Container(
+              height: .5,
+              margin: const EdgeInsets.only(left: 16),
+              color: cs.outlineVariant.withAlpha(40),
+            ),
+            itemBuilder: (_, index) => _ScoreRow(score: scores[index]),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ScoreRow extends StatelessWidget {
+  final Score score;
+  const _ScoreRow({required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final color = _scoreColor(cs, score.score);
+    final hasNumericGrade = double.tryParse(score.gradeText) != null;
+    final display = score.gradeText.isNotEmpty
+        ? score.gradeText
+        : score.score.toStringAsFixed(0);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 48,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  score.courseName,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: cs.onSurface,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '学分 ${score.credit.toStringAsFixed(1)} · ${score.category == ScoreCategory.elective ? '选修' : '必修'}',
+                  style: TextStyle(fontSize: 11, color: cs.outline),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                display,
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+              if (!hasNumericGrade && score.gradeText.isNotEmpty)
+                Text(
+                  score.score.toStringAsFixed(0),
+                  style: TextStyle(fontSize: 11, color: cs.outline),
+                ),
+              Text(
+                '绩点 ${score.gpaPoint.toStringAsFixed(1)}',
+                style: TextStyle(fontSize: 12, color: cs.outline),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+  final bool prominent;
+  const _Stat({
+    required this.label,
+    required this.value,
+    this.color,
+    this.prominent = false,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: prominent ? 30 : 20,
+            fontWeight: FontWeight.w800,
+            color: color ?? cs.onSurface,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(label, style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+      ],
+    );
+  }
+}
+
+class _VerticalDivider extends StatelessWidget {
+  final Color color;
+  const _VerticalDivider({required this.color});
+  @override
+  Widget build(BuildContext context) =>
+      Container(width: 1, height: 42, color: color);
+}
+
+class _ScoresEmpty extends StatelessWidget {
+  const _ScoresEmpty();
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.assessment_outlined, size: 64, color: cs.outline),
+          const SizedBox(height: 12),
+          Text('暂无成绩数据', style: TextStyle(color: cs.onSurfaceVariant)),
+          const SizedBox(height: 4),
+          Text(
+            '切换学期或下拉刷新试试',
+            style: TextStyle(fontSize: 12, color: cs.outline),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RoundedUnderlineIndicator extends Decoration {
+  final Color color;
+  const _RoundedUnderlineIndicator(this.color);
+  @override
+  BoxPainter createBoxPainter([VoidCallback? onChanged]) =>
+      _RoundedUnderlinePainter(color);
+}
+
+class _RoundedUnderlinePainter extends BoxPainter {
+  final Color color;
+  _RoundedUnderlinePainter(this.color);
+  @override
+  void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
+    final size = configuration.size;
+    if (size == null) return;
+    final rect = Rect.fromLTWH(
+      offset.dx + 12,
+      offset.dy + size.height - 3,
+      size.width - 24,
+      3,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+      Paint()..color = color,
+    );
+  }
+}
+
+Color _gpaColor(ColorScheme cs, double gpa) => gpa >= 3.5
+    ? cs.primary
+    : gpa >= 2
+    ? cs.tertiary
+    : cs.error;
+Color _scoreColor(ColorScheme cs, double score) => score >= 90
+    ? cs.primary
+    : score >= 80
+    ? cs.secondary
+    : score >= 70
+    ? cs.tertiary
+    : score >= 60
+    ? cs.tertiary
+    : cs.error;
+DateTime _dateOnly(DateTime value) =>
+    DateTime(value.year, value.month, value.day);
+String _weekday(DateTime value) =>
+    const ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][value.weekday - 1];
+String _examDate(DateTime value) => value.year == DateTime.now().year
+    ? '${value.month}月${value.day}日'
+    : '${value.year}年${value.month}月${value.day}日';
+String _time(TimeOfDay value) =>
+    '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
