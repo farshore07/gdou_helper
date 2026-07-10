@@ -28,6 +28,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   Future<void> _loadSaved() async {
     final sp = await SharedPreferences.getInstance();
     _userCtrl.text = sp.getString('saved_username') ?? '';
+    _remember = await loadRememberPassword();
     final pwd = await loadPassword();
     _passCtrl.text = pwd ?? '';
     setState(() {});
@@ -45,16 +46,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     final password = _passCtrl.text;
     if (username.isEmpty || password.isEmpty) return;
 
-    final sp = await SharedPreferences.getInstance();
-    if (_remember) {
-      await sp.setString('saved_username', username);
-      await savePassword(password);
-    } else {
-      await sp.remove('saved_username');
-      await secureDelete('saved_password');
-    }
-
-    await ref.read(authProvider.notifier).login(username, password);
+    await ref
+        .read(authProvider.notifier)
+        .login(username, password, remember: _remember);
   }
 
   @override
@@ -82,7 +76,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               children: [
                 Icon(Icons.school, size: 64, color: cs.primary),
                 const SizedBox(height: 12),
-                Text('GDOU 助手', style: Theme.of(context).textTheme.headlineSmall),
+                Text(
+                  'GDOU 助手',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
                 const SizedBox(height: 4),
                 Text('登录教务系统', style: TextStyle(color: cs.outline)),
                 const SizedBox(height: 24),
@@ -104,7 +101,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     prefixIcon: const Icon(Icons.lock_outline),
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
-                      icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility),
+                      icon: Icon(
+                        _obscure ? Icons.visibility_off : Icons.visibility,
+                      ),
                       onPressed: () => setState(() => _obscure = !_obscure),
                     ),
                   ),
@@ -119,13 +118,21 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     ),
                     GestureDetector(
                       onTap: () => setState(() => _remember = !_remember),
-                      child: Text('记住密码', style: TextStyle(fontSize: 14, color: cs.outline)),
+                      child: Text(
+                        '记住密码',
+                        style: TextStyle(fontSize: 14, color: cs.outline),
+                      ),
                     ),
                   ],
                 ),
-                if (auth.error != null && !auth.loading && !auth.isLoggedIn) ...[
+                if (auth.error != null &&
+                    !auth.loading &&
+                    !auth.isLoggedIn) ...[
                   const SizedBox(height: 12),
-                  Text(auth.error!, style: TextStyle(color: cs.error, fontSize: 13)),
+                  Text(
+                    auth.error!,
+                    style: TextStyle(color: cs.error, fontSize: 13),
+                  ),
                 ],
                 const SizedBox(height: 20),
                 SizedBox(
@@ -133,7 +140,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   child: FilledButton(
                     onPressed: auth.loading ? null : _login,
                     child: auth.loading
-                        ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Text('登录'),
                   ),
                 ),
@@ -141,7 +152,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 Text(
                   '我们重视你的隐私，不会收集、上传或分享任何个人信息。\n所有数据仅存储在你的设备本地。',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: cs.outline.withAlpha(150)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.outline.withAlpha(150),
+                  ),
                 ),
               ],
             ),

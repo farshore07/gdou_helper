@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -6,6 +7,8 @@ import '../services/api_service.dart';
 import '../services/secure_store.dart';
 
 class AuthNotifier extends Notifier<AuthState> {
+  Future<bool>? _reloginFuture;
+
   @override
   AuthState build() {
     _loadSaved();
@@ -19,46 +22,23 @@ class AuthNotifier extends Notifier<AuthState> {
     final savedCookie = await loadCookie();
     final savedToken = await loadElectricityToken();
     final username = await _loadUsername();
-
-    // 1. 有 cookie，验证是否有效
     if (savedCookie != null && username != null) {
-      bool valid = false;
       try {
-        final vr = await validateSession(savedCookie);
-        valid = vr.isOk && vr.data?['status'] == 'success';
-      } catch (_) {}
-
-      if (valid) {
-        state = AuthState(
-          isLoggedIn: true,
-          cookie: savedCookie,
-          username: username,
-          electricityToken: savedToken,
-        );
-        return;
+        final validation = await validateSession(savedCookie);
+        if (validation.isOk && validation.data?['status'] == 'success') {
+          state = AuthState(
+            isLoggedIn: true,
+            cookie: savedCookie,
+            username: username,
+            electricityToken: savedToken,
+          );
+          return;
+        }
+      } catch (_) {
+        debugPrint('认证：Cookie 校验失败');
       }
-
-      // 2. Cookie 过期，尝试自动重登
-      final password = await loadPassword();
-      if (password != null) {
-        try {
-          final r = await loginJwxt(username, password);
-          if (r.isOk && r.data?['status'] == 'success') {
-            final newCookie = r.data!['cookie'] as String;
-            await saveCookie(newCookie);
-            // 重登成功，也试电费
-            await doElectricityLogin(username, password);
-            final newToken = await loadElectricityToken();
-            state = AuthState(
-              isLoggedIn: true,
-              cookie: newCookie,
-              username: username,
-              electricityToken: newToken ?? savedToken,
-            );
-            return;
-          }
-        } catch (_) {}
-      }
+      debugPrint('认证：检测到 Cookie 失效');
+      await silentReLogin();
     }
   }
 
@@ -67,31 +47,43 @@ class AuthNotifier extends Notifier<AuthState> {
     return sp.getString('username');
   }
 
-  Future<void> login(String username, String password) async {
+  Future<void> login(
+    String username,
+    String password, {
+    required bool remember,
+  }) async {
     state = state.copyWith(loading: true, error: null);
     try {
-      // 1. 先登录电费
       final elecOk = await doElectricityLogin(username, password);
-
-      // 2. 再登录教务
-      final r = await loginJwxt(username, password);
-      if (r.isOk && r.data?['status'] == 'success') {
-        final cookie = r.data!['cookie'] as String;
-        await saveCookie(cookie);
-        state = AuthState(
-            isLoggedIn: true,
-            cookie: cookie,
-            username: username,
-            electricityToken: elecOk ? state.electricityToken : null);
-        final sp = await SharedPreferences.getInstance();
-        await sp.setString('username', username);
-      } else {
+      final result = await loginJwxt(username, password);
+      if (!result.isOk || result.data?['status'] != 'success') {
         state = state.copyWith(
-            loading: false, error: r.data?['message'] ?? r.message);
+          loading: false,
+          error: result.data?['message'] ?? result.message,
+        );
+        return;
       }
+      final cookie = result.data!['cookie'] as String;
+      await saveCookie(cookie);
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('username', username);
+      if (remember) {
+        await sp.setString('saved_username', username);
+        await savePassword(password);
+        await saveRememberPassword(true);
+      } else {
+        await sp.remove('saved_username');
+        await secureDelete('saved_password');
+        await saveRememberPassword(false);
+      }
+      state = AuthState(
+        isLoggedIn: true,
+        cookie: cookie,
+        username: username,
+        electricityToken: elecOk ? state.electricityToken : null,
+      );
     } on DioException catch (e) {
-      state = state.copyWith(
-          loading: false, error: handleError(e).message);
+      state = state.copyWith(loading: false, error: handleError(e).message);
     } on ApiException catch (e) {
       state = state.copyWith(loading: false, error: e.message);
     } catch (e) {
@@ -99,34 +91,58 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
-  // 静默重登（供 401 拦截器/页面调用）
-  Future<bool> silentReLogin() async {
-    final username = state.username;
+  Future<bool> silentReLogin() {
+    final pending = _reloginFuture;
+    if (pending != null) {
+      debugPrint('认证：正在等待其他登录任务');
+      return pending;
+    }
+    final future = _performSilentReLogin();
+    _reloginFuture = future;
+    future.whenComplete(() {
+      if (identical(_reloginFuture, future)) _reloginFuture = null;
+    });
+    return future;
+  }
+
+  Future<bool> _performSilentReLogin() async {
+    if (!await loadRememberPassword()) {
+      debugPrint('认证：未开启记住密码');
+      return false;
+    }
+    final username = state.username ?? await _loadUsername();
     final password = await loadPassword();
-    if (username == null || password == null) return false;
+    if (username == null || password == null) {
+      debugPrint('认证：未找到本地凭据');
+      return false;
+    }
+    debugPrint('认证：开始自动登录');
     try {
-      // 重登教务
-      final r = await loginJwxt(username, password);
-      if (r.isOk && r.data?['status'] == 'success') {
-        final cookie = r.data!['cookie'] as String;
+      final result = await loginJwxt(username, password);
+      if (result.isOk && result.data?['status'] == 'success') {
+        final cookie = result.data!['cookie'] as String;
         await saveCookie(cookie);
-        // 重登电费
         await doElectricityLogin(username, password);
         final token = await loadElectricityToken();
         state = state.copyWith(
+          isLoggedIn: true,
+          username: username,
           cookie: cookie,
           electricityToken: token ?? state.electricityToken,
         );
+        debugPrint('认证：自动登录成功');
         return true;
       }
     } catch (_) {}
+    // 未收到稳定的“密码错误”错误码，保留凭据以避免因网络或服务端故障误删。
+    debugPrint('认证：自动登录失败');
     return false;
   }
 
   Future<bool> doElectricityLogin(String username, String password) async {
-    final r = await loginElectricity(username, password);
-    if (r.isOk && r.data?['accessToken'] != null) {
-      final token = r.data!['accessToken'] as String;
+    final result = await loginElectricity(username, password);
+    if (result.isOk && result.data?['accessToken'] != null) {
+      final token = result.data!['accessToken'] as String;
       await saveElectricityToken(token);
       state = state.copyWith(electricityToken: token, electricityFailed: false);
       return true;
@@ -138,13 +154,17 @@ class AuthNotifier extends Notifier<AuthState> {
     state = const AuthState();
     await secureDelete('jwxt_cookie');
     await secureDelete('electricity_token');
+    await secureDelete('saved_password');
+    await secureDelete('remember_password');
     final sp = await SharedPreferences.getInstance();
     await sp.remove('username');
+    await sp.remove('saved_username');
   }
 }
 
-final authProvider =
-    NotifierProvider<AuthNotifier, AuthState>(AuthNotifier.new);
+final authProvider = NotifierProvider<AuthNotifier, AuthState>(
+  AuthNotifier.new,
+);
 
 class AuthState {
   final bool isLoggedIn;
@@ -177,15 +197,14 @@ class AuthState {
     String? error,
     bool clearError = false,
     bool? electricityFailed,
-  }) =>
-      AuthState(
-        isLoggedIn: isLoggedIn ?? this.isLoggedIn,
-        loading: loading ?? this.loading,
-        checking: checking ?? this.checking,
-        cookie: cookie ?? this.cookie,
-        username: username ?? this.username,
-        electricityToken: electricityToken ?? this.electricityToken,
-        error: clearError ? null : (error ?? this.error),
-        electricityFailed: electricityFailed ?? this.electricityFailed,
-      );
+  }) => AuthState(
+    isLoggedIn: isLoggedIn ?? this.isLoggedIn,
+    loading: loading ?? this.loading,
+    checking: checking ?? this.checking,
+    cookie: cookie ?? this.cookie,
+    username: username ?? this.username,
+    electricityToken: electricityToken ?? this.electricityToken,
+    error: clearError ? null : (error ?? this.error),
+    electricityFailed: electricityFailed ?? this.electricityFailed,
+  );
 }

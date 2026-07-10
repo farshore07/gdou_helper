@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'dart:convert';
@@ -13,15 +14,20 @@ import '../services/cache_service.dart';
 // ── 学期拆分："2025-2026-2" → academicYear: "2025-2026", term: "12" ──
 // GDOU正方教务: 第一学期=3, 第二学期=12
 // ── 401 自动重登 + 重试 ──
-Future<T> _withAutoReLogin<T>(Ref ref, Future<T> Function() fn) async {
+Future<T> _withAutoReLogin<T>(
+  Ref ref,
+  Future<T> Function(String cookie) fn,
+) async {
   try {
-    return await fn();
-  } on ApiException catch (e) {
-    if (e.statusCode == 401) {
-      final ok = await ref.read(authProvider.notifier).silentReLogin();
-      if (ok) return fn();
-    }
-    rethrow;
+    return await fn(ref.read(authProvider).cookie!);
+  } on ApiException catch (error) {
+    if (!isAuthenticationFailure(error)) rethrow;
+    debugPrint('认证：检测到 Cookie 失效');
+    if (!await ref.read(authProvider.notifier).silentReLogin()) rethrow;
+    final cookie = ref.read(authProvider).cookie;
+    if (cookie == null) rethrow;
+    debugPrint('认证：开始重试原请求');
+    return fn(cookie);
   }
 }
 
@@ -41,37 +47,46 @@ class TimetableNotifier extends AsyncNotifier<List<Course>> {
     final auth = ref.watch(authProvider);
     final semester = ref.watch(semesterProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return [];
-    final cacheKey = 'timetable_$semester';
+    final cacheKey = 'timetable_${auth.username}_$semester';
 
     // 1. 先返回缓存
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
-      final courses = list
-          .map((c) => Course.fromApiJson(c, semester))
-          .toList();
+      final courses = list.map((c) => Course.fromApiJson(c, semester)).toList();
       // 后台刷新
-      _fetchAndCache(cacheKey, auth.cookie!, semester);
+      _fetchAndCache(
+        cacheKey,
+        auth.cookie!,
+        semester,
+      ).catchError((_) => <Course>[]);
       return courses;
     }
 
     // 2. 无缓存，请求 API
-    return _fetchAndCache(cacheKey, auth.cookie!, semester);
+    return _fetchAndCache(
+      cacheKey,
+      auth.cookie!,
+      semester,
+    ).catchError((_) => <Course>[]);
   }
 
   Future<List<Course>> _fetchAndCache(
-      String key, String cookie, String semester) async {
+    String key,
+    String cookie,
+    String semester,
+  ) async {
     final (year, term) = _splitSemester(semester);
     final r = await _withAutoReLogin(
-        ref, () => fetchTimetable(cookie, year, term));
+      ref,
+      (currentCookie) => fetchTimetable(currentCookie, year, term),
+    );
     if (!r.isOk || r.data == null) throw ApiException('课表数据为空');
     final courses = (r.data!['courses'] as List<dynamic>?) ?? [];
-    final list = courses
-        .map((c) {
-          final m = c as Map<String, dynamic>;
-          return Course.fromApiJson(m, semester);
-        })
-        .toList();
+    final list = courses.map((c) {
+      final m = c as Map<String, dynamic>;
+      return Course.fromApiJson(m, semester);
+    }).toList();
     // 写缓存
     CacheService.set(key, jsonEncode(r.data!['courses']));
     return list;
@@ -84,7 +99,9 @@ class TimetableNotifier extends AsyncNotifier<List<Course>> {
 }
 
 final timetableProvider =
-    AsyncNotifierProvider<TimetableNotifier, List<Course>>(TimetableNotifier.new);
+    AsyncNotifierProvider<TimetableNotifier, List<Course>>(
+      TimetableNotifier.new,
+    );
 
 // ── 考试（缓存优先 + 后台刷新） ──
 class ExamsNotifier extends AsyncNotifier<List<Exam>> {
@@ -93,26 +110,37 @@ class ExamsNotifier extends AsyncNotifier<List<Exam>> {
     final auth = ref.watch(authProvider);
     final semester = ref.watch(semesterProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return [];
-    final cacheKey = 'exams_$semester';
+    final cacheKey = 'exams_${auth.username}_$semester';
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final exams = list.map((e) => Exam.fromApiJson(e)).toList();
-      _fetchExams(cacheKey, auth.cookie!, semester);
+      _fetchExams(cacheKey, auth.cookie!, semester).catchError((_) => <Exam>[]);
       return exams;
     }
-    return _fetchExams(cacheKey, auth.cookie!, semester);
+    return _fetchExams(
+      cacheKey,
+      auth.cookie!,
+      semester,
+    ).catchError((_) => <Exam>[]);
   }
 
   Future<List<Exam>> _fetchExams(
-      String key, String cookie, String semester) async {
+    String key,
+    String cookie,
+    String semester,
+  ) async {
     final (year, term) = _splitSemester(semester);
     final r = await _withAutoReLogin(
-        ref, () => fetchExams(cookie, year, term));
+      ref,
+      (currentCookie) => fetchExams(currentCookie, year, term),
+    );
     if (!r.isOk || r.data == null) throw ApiException('考试数据为空');
     final items = (r.data!['items'] as List<dynamic>?) ?? [];
     CacheService.set(key, jsonEncode(items));
-    return items.map((e) => Exam.fromApiJson(e as Map<String, dynamic>)).toList();
+    return items
+        .map((e) => Exam.fromApiJson(e as Map<String, dynamic>))
+        .toList();
   }
 }
 
@@ -122,34 +150,51 @@ class GradesNotifier extends AsyncNotifier<List<Score>> {
     final auth = ref.watch(authProvider);
     final semester = ref.watch(semesterProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return [];
-    final cacheKey = 'grades_$semester';
+    final cacheKey = 'grades_${auth.username}_$semester';
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final scores = list.map((s) => Score.fromApiJson(s, semester)).toList();
-      _fetchGrades(cacheKey, auth.cookie!, semester);
+      _fetchGrades(
+        cacheKey,
+        auth.cookie!,
+        semester,
+      ).catchError((_) => <Score>[]);
       return scores;
     }
-    return _fetchGrades(cacheKey, auth.cookie!, semester);
+    return _fetchGrades(
+      cacheKey,
+      auth.cookie!,
+      semester,
+    ).catchError((_) => <Score>[]);
   }
 
   Future<List<Score>> _fetchGrades(
-      String key, String cookie, String semester) async {
+    String key,
+    String cookie,
+    String semester,
+  ) async {
     final (year, term) = _splitSemester(semester);
     final r = await _withAutoReLogin(
-        ref, () => fetchGrades(cookie, year, term));
+      ref,
+      (currentCookie) => fetchGrades(currentCookie, year, term),
+    );
     if (!r.isOk || r.data == null) throw ApiException('成绩数据为空');
     final items = (r.data!['items'] as List<dynamic>?) ?? [];
     CacheService.set(key, jsonEncode(items));
-    return items.map((s) => Score.fromApiJson(s as Map<String, dynamic>, semester)).toList();
+    return items
+        .map((s) => Score.fromApiJson(s as Map<String, dynamic>, semester))
+        .toList();
   }
 }
 
-final examsProvider =
-    AsyncNotifierProvider<ExamsNotifier, List<Exam>>(ExamsNotifier.new);
+final examsProvider = AsyncNotifierProvider<ExamsNotifier, List<Exam>>(
+  ExamsNotifier.new,
+);
 
-final gradesProvider =
-    AsyncNotifierProvider<GradesNotifier, List<Score>>(GradesNotifier.new);
+final gradesProvider = AsyncNotifierProvider<GradesNotifier, List<Score>>(
+  GradesNotifier.new,
+);
 
 // ── 电费（缓存优先） ──
 class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
@@ -173,14 +218,17 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
         final d = ElectricityData.fromJson(jsonDecode(cached));
         return d;
       }
-      if (firstErrorMsg.contains('401')) {
+      if (isAuthenticationFailure(handleError(e))) {
         // 尝试自动重登
         final ok = await ref.read(authProvider.notifier).silentReLogin();
         if (ok) {
           final newToken = ref.read(authProvider).electricityToken;
           if (newToken != null) {
             try {
-              return _fetchElectricity(newToken, ref.read(authProvider).username!);
+              return _fetchElectricity(
+                newToken,
+                ref.read(authProvider).username!,
+              );
             } catch (_) {}
           }
         }
@@ -191,18 +239,25 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
   }
 
   Future<ElectricityData> _fetchElectricity(
-      String token, String username) async {
+    String token,
+    String username,
+  ) async {
     Object? firstError;
     ApiResponse<Map<String, dynamic>>? balancesR;
     ApiResponse<Map<String, dynamic>>? situationR;
     ({List<ElecRecord> recharges, List<ElecRecord> deductions})? history;
 
-    try { balancesR = await fetchElectricityBalances(token); }
-    catch (e) { firstError = e; }
-    try { situationR = await fetchElectricitySituation(token, username); }
-    catch (_) {}
-    try { history = await _fetchRoomsAndHistory(token, username); }
-    catch (_) {}
+    try {
+      balancesR = await fetchElectricityBalances(token);
+    } catch (e) {
+      firstError = e;
+    }
+    try {
+      situationR = await fetchElectricitySituation(token, username);
+    } catch (_) {}
+    try {
+      history = await _fetchRoomsAndHistory(token, username);
+    } catch (_) {}
 
     if (balancesR == null || !balancesR.isOk || balancesR.data == null) {
       if (firstError != null) throw firstError;
@@ -222,9 +277,11 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
     final data = ElectricityData(
       acBalance: (ac?['moneyBalance'] as num?)?.toDouble() ?? 0,
       lightBalance: (light?['moneyBalance'] as num?)?.toDouble() ?? 0,
-      todayUsage: ((ac?['todayBalance'] as num?)?.toDouble() ?? 0) +
+      todayUsage:
+          ((ac?['todayBalance'] as num?)?.toDouble() ?? 0) +
           ((light?['todayBalance'] as num?)?.toDouble() ?? 0),
-      monthUsage: ((ac?['monthBalance'] as num?)?.toDouble() ?? 0) +
+      monthUsage:
+          ((ac?['monthBalance'] as num?)?.toDouble() ?? 0) +
           ((light?['monthBalance'] as num?)?.toDouble() ?? 0),
       roomName: light?['areaInfo'] as String? ?? ac?['areaInfo'] as String?,
       currentMonthUsage: curMonth,
@@ -234,14 +291,15 @@ class ElectricityNotifier extends AsyncNotifier<ElectricityData?> {
       deductions: history?.deductions ?? [],
     );
     CacheService.set(
-        'electricity_${ref.read(authProvider).username}',
-        jsonEncode(data.toJson()));
+      'electricity_${ref.read(authProvider).username}',
+      jsonEncode(data.toJson()),
+    );
     return data;
   }
 }
 
 Future<({List<ElecRecord> recharges, List<ElecRecord> deductions})?>
-    _fetchRoomsAndHistory(String token, String username) async {
+_fetchRoomsAndHistory(String token, String username) async {
   final roomsR = await fetchElectricityRooms(token);
   if (!roomsR.isOk || roomsR.data == null) return null;
   final rooms = (roomsR.data as List<dynamic>?) ?? [];
@@ -263,15 +321,13 @@ Future<({List<ElecRecord> recharges, List<ElecRecord> deductions})?>
     return list.map((e) {
       final m = e as Map<String, dynamic>;
       return ElecRecord(
-        amount: (m['rechargeSum'] ?? m['amount'] ?? m['moneyUsed'] ?? 0)
-                is num
+        amount: (m['rechargeSum'] ?? m['amount'] ?? m['moneyUsed'] ?? 0) is num
             ? ((m['rechargeSum'] ?? m['amount'] ?? m['moneyUsed']) as num)
-                .toDouble()
+                  .toDouble()
             : 0,
-        time: m['rechargeTime'] as String? ??
-            m['issueTime'] as String? ??
-            '',
-        label: m['rechargeChannelName'] as String? ??
+        time: m['rechargeTime'] as String? ?? m['issueTime'] as String? ?? '',
+        label:
+            m['rechargeChannelName'] as String? ??
             m['rechargeMethodName'] as String? ??
             '',
       );
@@ -284,8 +340,10 @@ Future<({List<ElecRecord> recharges, List<ElecRecord> deductions})?>
   );
 }
 
-final electricityProvider = AsyncNotifierProvider<ElectricityNotifier,
-    ElectricityData?>(ElectricityNotifier.new);
+final electricityProvider =
+    AsyncNotifierProvider<ElectricityNotifier, ElectricityData?>(
+      ElectricityNotifier.new,
+    );
 
 class ElecRecord {
   final double amount;
@@ -322,11 +380,15 @@ class ElectricityData {
   });
 
   Map<String, dynamic> toJson() => {
-        'ac': acBalance, 'light': lightBalance, 'today': todayUsage,
-        'month': monthUsage, 'roomName': roomName,
-        'curMonth': currentMonthUsage, 'lastMonth': lastMonthUsage,
-        'change': usageChange,
-      };
+    'ac': acBalance,
+    'light': lightBalance,
+    'today': todayUsage,
+    'month': monthUsage,
+    'roomName': roomName,
+    'curMonth': currentMonthUsage,
+    'lastMonth': lastMonthUsage,
+    'change': usageChange,
+  };
 
   factory ElectricityData.fromJson(Map<String, dynamic> json) =>
       ElectricityData(
