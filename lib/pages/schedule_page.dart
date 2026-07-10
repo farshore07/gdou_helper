@@ -94,21 +94,48 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
           children: [
             Row(
               children: [
-                Container(width: 14, height: 14,
-                    decoration: BoxDecoration(color: Color(c.color), borderRadius: BorderRadius.circular(3))),
+                Container(
+                  width: 14,
+                  height: 14,
+                  decoration: BoxDecoration(
+                    color: Color(c.color),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
                 const SizedBox(width: 10),
-                Flexible(child: Text(c.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold))),
+                Flexible(
+                  child: Text(
+                    c.name,
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
               ],
             ),
             if (!active) ...[
               const SizedBox(height: 4),
-              Text('非本周', style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+              Text(
+                '非本周',
+                style: TextStyle(color: Colors.grey[500], fontSize: 13),
+              ),
             ],
             const SizedBox(height: 16),
             _detail(Icons.person_outline, '教师', c.teacher),
             _detail(Icons.location_on_outlined, '教室', c.classroom),
-            _detail(Icons.access_time, '时间',
-                '${_dayLabels[c.dayOfWeek - 1]} 第${c.startPeriod}-${c.startPeriod + c.duration - 1}节'),
+            _detail(
+              Icons.school_outlined,
+              '学分',
+              (c.credit?.trim().isEmpty ?? true)
+                  ? '未知'
+                  : '${c.credit!.trim()} 学分',
+            ),
+            _detail(
+              Icons.access_time,
+              '时间',
+              '${_dayLabels[c.dayOfWeek - 1]} 第${c.startPeriod}-${c.startPeriod + c.duration - 1}节',
+            ),
             _detail(Icons.date_range, '周次', '第${c.startWeek}-${c.endWeek}周'),
             _detail(Icons.school_outlined, '学期', semesterLabel(c.semester)),
             if (c.note != null && c.note!.isNotEmpty)
@@ -116,6 +143,39 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
             const SizedBox(height: 8),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showCoursePicker(List<Course> courses) {
+    showModalBottomSheet(
+      context: context,
+      useSafeArea: true,
+      builder: (sheetContext) => ListView(
+        shrinkWrap: true,
+        children: [
+          const ListTile(title: Text('选择要查看的课程')),
+          ...courses.map(
+            (course) => ListTile(
+              leading: Container(
+                width: 12,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: Color(course.color),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+              ),
+              title: Text(course.name),
+              subtitle: Text(
+                '${_dayLabels[course.dayOfWeek - 1]} 第${course.startPeriod}-${course.startPeriod + course.duration - 1}节',
+              ),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _showDetail(course);
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -128,14 +188,33 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
     final courses = asyncCourses.asData?.value ?? [];
 
     final semester = ref.watch(semesterProvider);
-    final weekStart = _semesterStart(semester).add(Duration(days: (_week - 1) * 7));
+    final weekStart = _semesterStart(
+      semester,
+    ).add(Duration(days: (_week - 1) * 7));
+
+    // 计算今天对应星期几（仅当查看本周时有效）
+    final todayIdx = () {
+      if (_week != _currentWeekForSemester(semester)) {
+        return -1;
+      }
+      final now = DateTime.now();
+      for (var i = 0; i < 7; i++) {
+        final d = weekStart.add(Duration(days: i));
+        if (d.year == now.year && d.month == now.month && d.day == now.day) {
+          return i;
+        }
+      }
+      return -1;
+    }();
 
     return Scaffold(
       appBar: AppBar(
-        title: Column(children: [
-          const Text('课表', style: TextStyle(fontSize: 16)),
-          Text(semester, style: TextStyle(fontSize: 11, color: cs.outline)),
-        ]),
+        title: Column(
+          children: [
+            const Text('课表', style: TextStyle(fontSize: 16)),
+            Text(semester, style: TextStyle(fontSize: 11, color: cs.outline)),
+          ],
+        ),
         actions: [
           const SemesterSelector(),
           IconButton(
@@ -152,7 +231,9 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
             tooltip: '回到本周',
             onPressed: () {
               final cur = _currentWeekForSemester(ref.read(semesterProvider));
-              if (_week != cur) _goWeek(cur);
+              if (_week != cur) {
+                _goWeek(cur);
+              }
             },
           ),
           const SizedBox(width: 4),
@@ -161,63 +242,112 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
       body: asyncCourses.isLoading
           ? const Center(child: CircularProgressIndicator())
           : asyncCourses.hasError
-              ? Center(child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.error_outline, size: 48, color: cs.error),
-                      const SizedBox(height: 12),
-                      Text('加载失败', style: TextStyle(fontSize: 16, color: cs.error)),
-                      Text('${asyncCourses.error}', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: cs.outline)),
-                      const SizedBox(height: 16),
-                      OutlinedButton.icon(
-                        onPressed: () => ref.invalidate(timetableProvider),
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('重试'),
-                      ),
-                    ]),
-                  ))
-              : courses.isEmpty
-                  ? Center(child: Text('暂无课表数据', style: TextStyle(color: cs.outline)))
-                  : Column(
-                      children: [
-                        // ── 星期头（固定） ──
-                        Row(
-                          children: [
-                            const SizedBox(width: _timeW),
-                            ...List.generate(7, (i) {
-                                  final day = weekStart.add(Duration(days: i));
-                                  return Expanded(
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(vertical: 4),
-                                      decoration: BoxDecoration(
-                                        border: Border(bottom: BorderSide(color: gridColor)),
-                                        color: cs.surfaceContainerHighest.withAlpha(80),
-                                      ),
-                                      child: Column(
-                                        children: [
-                                          Text(_dayLabels[i], style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.onSurface)),
-                                          Text('${day.month}/${day.day}', style: TextStyle(fontSize: 9, color: cs.outline)),
-                                        ],
-                                      ),
-                                    ),
-                                  );
-                                }),
-                          ],
-                        ),
-                        // ── 课表网格（PageView 滑动切换周） ──
-                        Expanded(
-                          child: PageView.builder(
-                            controller: _pageCtrl,
-                            itemCount: _maxWeek,
-                            itemBuilder: (_, pageIndex) => _buildGrid(courses, pageIndex + 1, gridColor, cs),
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.error_outline, size: 48, color: cs.error),
+                    const SizedBox(height: 12),
+                    Text(
+                      '加载失败',
+                      style: TextStyle(fontSize: 16, color: cs.error),
+                    ),
+                    Text(
+                      '${asyncCourses.error}',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: cs.outline),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: () => ref.invalidate(timetableProvider),
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('重试'),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : courses.isEmpty
+          ? Center(
+              child: Text('暂无课表数据', style: TextStyle(color: cs.outline)),
+            )
+          : Column(
+              children: [
+                // ── 星期头（固定） ──
+                Row(
+                  children: [
+                    const SizedBox(width: _timeW),
+                    ...List.generate(7, (i) {
+                      final day = weekStart.add(Duration(days: i));
+                      final isToday = i == todayIdx;
+                      return Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(
+                                color: isToday ? cs.primary : gridColor,
+                                width: isToday ? 2 : 1,
+                              ),
+                            ),
+                            color: isToday
+                                ? cs.primary.withAlpha(25)
+                                : cs.surfaceContainerHighest.withAlpha(80),
+                          ),
+                          child: Column(
+                            children: [
+                              Text(
+                                _dayLabels[i],
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: isToday
+                                      ? FontWeight.bold
+                                      : FontWeight.w600,
+                                  color: isToday ? cs.primary : cs.onSurface,
+                                ),
+                              ),
+                              Text(
+                                '${day.month}/${day.day}',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  color: isToday ? cs.primary : cs.outline,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
+                      );
+                    }),
+                  ],
+                ),
+                // ── 课表网格（PageView 滑动切换周） ──
+                Expanded(
+                  child: PageView.builder(
+                    controller: _pageCtrl,
+                    itemCount: _maxWeek,
+                    itemBuilder: (_, pageIndex) => _buildGrid(
+                      courses,
+                      pageIndex + 1,
+                      gridColor,
+                      cs,
+                      todayIdx,
                     ),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 
-  Widget _buildGrid(List<Course> courses, int week, Color gridColor, ColorScheme cs) {
+  Widget _buildGrid(
+    List<Course> courses,
+    int week,
+    Color gridColor,
+    ColorScheme cs,
+    int todayIdx,
+  ) {
     return SingleChildScrollView(
       child: SizedBox(
         height: _periods * _rowH,
@@ -227,99 +357,75 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
             SizedBox(
               width: _timeW,
               child: Column(
-                children: List.generate(_periods, (i) => Container(
-                      height: _rowH,
-                      decoration: BoxDecoration(
-                        border: Border(top: BorderSide(color: gridColor)),
+                children: List.generate(_periods, (i) {
+                  final isBreak = i == 4 || i == 8;
+                  return Container(
+                    height: _rowH,
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: BorderSide(
+                          color: isBreak ? cs.primary.withAlpha(70) : gridColor,
+                          width: isBreak ? 1.5 : 1,
+                        ),
                       ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text('${i + 1}',
-                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: cs.onSurface)),
-                          Text(_periodTimes[i],
-                              style: TextStyle(fontSize: 8, color: cs.outline)),
-                        ],
-                      ),
-                    )),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          '${i + 1}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: cs.onSurface,
+                          ),
+                        ),
+                        Text(
+                          _periodTimes[i],
+                          style: TextStyle(fontSize: 8, color: cs.outline),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
               ),
             ),
             // ── 每天一列 ──
             ...List.generate(7, (day) {
-              final dayCourses = courses.where((c) => c.dayOfWeek == day + 1).toList()
-                ..sort((a, b) {
-                  final aActive = a.startWeek <= week && week <= a.endWeek;
-                  final bActive = b.startWeek <= week && week <= b.endWeek;
-                  if (aActive && !bActive) return 1;
-                  if (!aActive && bActive) return -1;
-                  return 0;
-                });
+              final dayCourses = courses
+                  .where((c) => c.dayOfWeek == day + 1)
+                  .toList();
               return Expanded(
                 child: Stack(
                   children: [
-                    ...List.generate(_periods, (i) => Positioned(
-                          top: i * _rowH, left: 0, right: 0,
-                          child: Container(
-                            height: _rowH,
-                            decoration: BoxDecoration(
-                              border: Border(
-                                top: BorderSide(color: gridColor),
-                                left: BorderSide(color: gridColor),
+                    // 今天列背景高亮
+                    if (day == todayIdx)
+                      Positioned.fill(
+                        child: Container(color: cs.primary.withAlpha(8)),
+                      ),
+                    ...List.generate(_periods, (i) {
+                      final isBreak = i == 4 || i == 8;
+                      return Positioned(
+                        top: i * _rowH,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          height: _rowH,
+                          decoration: BoxDecoration(
+                            border: Border(
+                              top: BorderSide(
+                                color: isBreak
+                                    ? cs.primary.withAlpha(70)
+                                    : gridColor,
+                                width: isBreak ? 1.5 : 1,
                               ),
+                              left: BorderSide(color: gridColor),
                             ),
                           ),
-                        )),
-                    ...(() {
-                      final groups = <String, List<Course>>{};
-                      for (final c in dayCourses) {
-                        final key = '${c.startPeriod}-${c.duration}';
-                        groups.putIfAbsent(key, () => []).add(c);
-                      }
-                      return groups.values.expand((group) {
-                        return group.asMap().entries.map((entry) {
-                          final idx = entry.key;
-                          final c = entry.value;
-                          final n = group.length;
-                          final active = c.startWeek <= week && week <= c.endWeek;
-                          final top = (c.startPeriod - 1) * _rowH + 1;
-                          final h = c.duration * _rowH - 2;
-                          final leftPad = 1.0 + idx * (1.0 / n);
-                          final rightPad = 1.0 + (n - idx - 1) * (1.0 / n);
-                          return Positioned(
-                            top: top, left: leftPad, right: rightPad, height: h,
-                            child: GestureDetector(
-                              onTap: () => _showDetail(c),
-                              child: Container(
-                                padding: const EdgeInsets.all(2),
-                                decoration: BoxDecoration(
-                                  gradient: active
-                                      ? LinearGradient(
-                                          begin: Alignment.topLeft,
-                                          end: Alignment.bottomRight,
-                                          colors: [Color(c.color).withAlpha(230), Color(c.color)],
-                                        )
-                                      : null,
-                                  color: active ? null : const Color(0xFFBDBDBD),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(c.name,
-                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: active ? Colors.white : Colors.grey[600]),
-                                        maxLines: 3, overflow: TextOverflow.ellipsis),
-                                    if (c.classroom.isNotEmpty)
-                                      Text(c.classroom,
-                                          style: TextStyle(fontSize: 8, color: active ? const Color(0xCCFFFFFF) : Colors.grey[600]),
-                                          maxLines: 2, overflow: TextOverflow.ellipsis),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        });
-                      }).toList();
-                    })(),
+                        ),
+                      );
+                    }),
+                    ..._renderCoursesForDay(dayCourses, week),
                   ],
                 ),
               );
@@ -330,15 +436,129 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
     );
   }
 
-  Widget _detail(IconData icon, String label, String value) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: Colors.grey[600]),
-            const SizedBox(width: 8),
-            Text('$label：', style: TextStyle(color: Colors.grey[600])),
-            Flexible(child: Text(value)),
-          ],
+  List<Widget> _renderCoursesForDay(List<Course> dayCourses, int week) {
+    return groupCoursesForDay(dayCourses, week).map((group) {
+      final c = group.visible;
+      final top = (c.startPeriod - 1) * _rowH + 1;
+      final h = c.duration * _rowH - 2;
+      return Positioned(
+        top: top,
+        left: 1,
+        right: 1,
+        height: h,
+        child: GestureDetector(
+          onTap: () => group.courses.length == 1
+              ? _showDetail(c)
+              : _showCoursePicker(group.courses),
+          child: c.startWeek <= week && week <= c.endWeek
+              ? _activeCourse(c)
+              : _inactiveCourse(c),
         ),
       );
+    }).toList();
+  }
+
+  /// 本周课程：实心渐变 + 白字 + 阴影
+  Widget _activeCourse(Course c) => Container(
+    padding: const EdgeInsets.all(3),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(c.color).withAlpha(230), Color(c.color)],
+      ),
+      borderRadius: BorderRadius.circular(5),
+      boxShadow: [
+        BoxShadow(
+          color: Color(c.color).withAlpha(60),
+          blurRadius: 4,
+          offset: const Offset(0, 2),
+        ),
+      ],
+    ),
+    child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          c.name,
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (c.classroom.isNotEmpty)
+          Text(
+            c.classroom,
+            style: const TextStyle(fontSize: 8, color: Color(0xCCFFFFFF)),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+      ],
+    ),
+  );
+
+  Widget _inactiveCourse(Course c) => Container(
+    padding: const EdgeInsets.all(3),
+    decoration: BoxDecoration(
+      color: Color(c.color).withAlpha(35),
+      border: Border.all(color: Color(c.color).withAlpha(100)),
+      borderRadius: BorderRadius.circular(5),
+    ),
+    child: Center(
+      child: Text(
+        c.name,
+        style: TextStyle(fontSize: 10, color: Color(c.color).withAlpha(210)),
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+      ),
+    ),
+  );
+  Widget _detail(IconData icon, String label, String value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      children: [
+        Icon(icon, size: 18, color: Colors.grey[600]),
+        const SizedBox(width: 8),
+        Text('$label：', style: TextStyle(color: Colors.grey[600])),
+        Flexible(child: Text(value)),
+      ],
+    ),
+  );
+}
+
+class CourseDisplayGroup {
+  final Course visible;
+  final List<Course> courses;
+  const CourseDisplayGroup(this.visible, this.courses);
+}
+
+List<CourseDisplayGroup> groupCoursesForDay(List<Course> courses, int week) {
+  final sorted = [...courses]
+    ..sort((a, b) => a.startPeriod.compareTo(b.startPeriod));
+  final groups = <List<Course>>[];
+  var current = <Course>[];
+  var currentEnd = 0;
+
+  for (final course in sorted) {
+    if (current.isNotEmpty && course.startPeriod > currentEnd) {
+      groups.add(current);
+      current = [];
+      currentEnd = 0;
+    }
+    current.add(course);
+    final end = course.startPeriod + course.duration - 1;
+    if (end > currentEnd) currentEnd = end;
+  }
+  if (current.isNotEmpty) groups.add(current);
+
+  return groups.map((group) {
+    final visible = group.firstWhere(
+      (course) => course.startWeek <= week && week <= course.endWeek,
+      orElse: () => group.first,
+    );
+    return CourseDisplayGroup(visible, group);
+  }).toList();
 }
