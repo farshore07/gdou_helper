@@ -528,3 +528,35 @@ Future<LibraryResource> fetchLibraryResource(int id) async {
 Future<void> recordLibraryDownload(int id) async {
   await dio.post('/api/v1/library/resources/$id/download');
 }
+
+Future<ApiResponse<Map<String, dynamic>>> fetchCurrentUser(String token) async {
+  final response = await dio.get(
+    '/api/v1/me',
+    options: Options(headers: {'Authorization': 'Bearer $token'}),
+  );
+  return _toResponse(response);
+}
+
+Future<({List<Map<String, dynamic>> items, int total})> fetchAdminUsers(
+  String token, {
+  int page = 1,
+  String? query,
+}) async {
+  final response = _toResponse(
+    await dio.get(
+      '/api/v1/admin/users',
+      queryParameters: {
+        'page': page,
+        if (query != null && query.isNotEmpty) 'q': query,
+      },
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    ),
+  );
+  final data = response.data ?? const <String, dynamic>{};
+  return (
+    items: (data['items'] as List<dynamic>? ?? [])
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList(),
+    total: (data['total'] as num?)?.toInt() ?? 0,
+  );
+}

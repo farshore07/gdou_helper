@@ -19,18 +19,29 @@ class AuthNotifier extends Notifier<AuthState> {
     await loadApiServer();
     if (state.isLoggedIn) return;
 
+    final savedToken = await loadAppToken();
     final savedCookie = await loadCookie();
-    final savedToken = await loadElectricityToken();
+    final savedElectricityToken = await loadElectricityToken();
     final username = await _loadUsername();
     if (savedCookie != null && username != null) {
       try {
         final validation = await validateSession(savedCookie);
         if (validation.isOk && validation.data?['status'] == 'success') {
+          var isAdmin = false;
+          if (savedToken != null) {
+            try {
+              isAdmin =
+                  (await fetchCurrentUser(savedToken)).data?['is_admin'] ==
+                  true;
+            } catch (_) {}
+          }
           state = AuthState(
             isLoggedIn: true,
             cookie: savedCookie,
             username: username,
-            electricityToken: savedToken,
+            electricityToken: savedElectricityToken,
+            appToken: savedToken,
+            isAdmin: isAdmin,
           );
           return;
         }
@@ -64,6 +75,8 @@ class AuthNotifier extends Notifier<AuthState> {
         return;
       }
       final cookie = result.data!['cookie'] as String;
+      final appToken = result.data!['app_token'] as String?;
+      if (appToken != null) await saveAppToken(appToken);
       await saveCookie(cookie);
       final sp = await SharedPreferences.getInstance();
       await sp.setString('username', username);
@@ -81,6 +94,8 @@ class AuthNotifier extends Notifier<AuthState> {
         cookie: cookie,
         username: username,
         electricityToken: elecOk ? state.electricityToken : null,
+        appToken: appToken,
+        isAdmin: result.data!['is_admin'] == true,
       );
     } on DioException catch (e) {
       state = state.copyWith(loading: false, error: handleError(e).message);
@@ -121,6 +136,8 @@ class AuthNotifier extends Notifier<AuthState> {
       final result = await loginJwxt(username, password);
       if (result.isOk && result.data?['status'] == 'success') {
         final cookie = result.data!['cookie'] as String;
+        final appToken = result.data!['app_token'] as String?;
+        if (appToken != null) await saveAppToken(appToken);
         await saveCookie(cookie);
         await doElectricityLogin(username, password);
         final token = await loadElectricityToken();
@@ -156,6 +173,7 @@ class AuthNotifier extends Notifier<AuthState> {
     await secureDelete('electricity_token');
     await secureDelete('saved_password');
     await secureDelete('remember_password');
+    await deleteAppToken();
     final sp = await SharedPreferences.getInstance();
     await sp.remove('username');
     await sp.remove('saved_username');
@@ -175,6 +193,8 @@ class AuthState {
   final String? electricityToken;
   final String? error;
   final bool electricityFailed;
+  final String? appToken;
+  final bool isAdmin;
 
   const AuthState({
     this.isLoggedIn = false,
@@ -185,6 +205,8 @@ class AuthState {
     this.electricityToken,
     this.error,
     this.electricityFailed = false,
+    this.appToken,
+    this.isAdmin = false,
   });
 
   AuthState copyWith({
@@ -197,6 +219,8 @@ class AuthState {
     String? error,
     bool clearError = false,
     bool? electricityFailed,
+    String? appToken,
+    bool? isAdmin,
   }) => AuthState(
     isLoggedIn: isLoggedIn ?? this.isLoggedIn,
     loading: loading ?? this.loading,
@@ -206,5 +230,7 @@ class AuthState {
     electricityToken: electricityToken ?? this.electricityToken,
     error: clearError ? null : (error ?? this.error),
     electricityFailed: electricityFailed ?? this.electricityFailed,
+    appToken: appToken ?? this.appToken,
+    isAdmin: isAdmin ?? this.isAdmin,
   );
 }

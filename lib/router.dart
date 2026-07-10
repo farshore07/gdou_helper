@@ -9,7 +9,7 @@ import 'pages/exam_score_page.dart';
 import 'pages/about_page.dart';
 import 'pages/more_page.dart';
 import 'pages/settings_page.dart';
-
+import 'pages/admin_page.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
@@ -19,28 +19,41 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state, navigationShell) =>
             AppShell(navigationShell: navigationShell),
         branches: [
-          StatefulShellBranch(routes: [
-            GoRoute(
-                path: '/schedule', builder: (_, _) => const SchedulePage()),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/schedule',
+                builder: (_, _) => const SchedulePage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
                 path: '/dormitory',
-                builder: (_, _) => const DormitoryPage()),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
+                builder: (_, _) => const DormitoryPage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
                 path: '/exam-score',
-                builder: (_, _) => const ExamScorePage()),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(path: '/more', builder: (_, _) => const MorePage()),
-          ]),
+                builder: (_, _) => const ExamScorePage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(path: '/more', builder: (_, _) => const MorePage()),
+            ],
+          ),
         ],
       ),
       GoRoute(path: '/login', builder: (_, _) => const LoginPage()),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
       GoRoute(path: '/about', builder: (_, _) => const AboutPage()),
+      GoRoute(path: '/admin', builder: (_, _) => const AdminPage()),
     ],
   );
 });

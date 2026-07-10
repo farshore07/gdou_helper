@@ -20,3 +20,7 @@ Future<void> saveElectricityToken(String token) =>
     secureWrite('electricity_token', token);
 Future<String?> loadElectricityToken() => secureRead('electricity_token');
 Future<void> clearAllSecure() => _store.deleteAll();
+
+Future<void> saveAppToken(String token) => secureWrite('app_token', token);
+Future<String?> loadAppToken() => secureRead('app_token');
+Future<void> deleteAppToken() => secureDelete('app_token');

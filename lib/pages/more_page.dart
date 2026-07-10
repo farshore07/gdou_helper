@@ -14,7 +14,8 @@ class MorePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final cs = Theme.of(context).colorScheme;
-    final username = ref.watch(authProvider).username;
+    final auth = ref.watch(authProvider);
+    final username = auth.username;
 
     final tools = <Widget>[
       _tile(
@@ -51,6 +52,19 @@ class MorePage extends ConsumerWidget {
           if (username != null) _logoutButton(context, ref),
           _section(context, '工具'),
           _groupCard(context, tools),
+          if (auth.isAdmin) ...[
+            _section(context, '管理'),
+            _groupCard(context, [
+              _tile(
+                context,
+                icon: Icons.admin_panel_settings_outlined,
+                color: cs.primary,
+                title: '管理后台',
+                subtitle: '用户、资料与分类管理',
+                onTap: () => context.push('/admin'),
+              ),
+            ]),
+          ],
           _section(context, '其他'),
           _groupCard(context, [
             _tile(
