@@ -562,9 +562,15 @@ class _ScoreRow extends ConsumerWidget {
   }
 
   void _showDetail(BuildContext context, WidgetRef ref) {
-    final cookie = ref.read(authProvider).cookie;
+    final auth = ref.read(authProvider);
+    final cookie = auth.cookie;
     if (cookie == null) return;
-    final future = fetchGradeDetail(cookie, query: score.detailQuery);
+    final detailId = score.detailQuery['jxb_id'] ?? score.id;
+    final future = fetchCachedGradeDetail(
+      'grade_detail_${auth.username}_$detailId',
+      cookie,
+      query: score.detailQuery,
+    );
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -583,7 +589,7 @@ class _ScoreRow extends ConsumerWidget {
               child: Center(child: Text('获取详细成绩失败')),
             );
           }
-          final data = snapshot.data?.data ?? const <String, dynamic>{};
+          final data = snapshot.data ?? const <String, dynamic>{};
           final items = (data['items'] as List<dynamic>? ?? [])
               .map((item) => Map<String, dynamic>.from(item as Map))
               .toList();

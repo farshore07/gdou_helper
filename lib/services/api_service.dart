@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/resource_item.dart';
+import 'cache_service.dart';
 
 final dio = Dio(
   BaseOptions(
@@ -235,6 +237,37 @@ Future<ApiResponse<Map<String, dynamic>>> fetchGradeDetail(
     data: {'cookie': cookie, 'query': query},
   );
   return _toResponse(response);
+}
+
+final _pendingGradeDetails = <String, Future<Map<String, dynamic>>>{};
+
+Future<Map<String, dynamic>> fetchCachedGradeDetail(
+  String cacheKey,
+  String cookie, {
+  Map<String, String> query = const {},
+}) {
+  final pending = _pendingGradeDetails[cacheKey];
+  if (pending != null) return pending;
+  final future = () async {
+    final cached = await CacheService.get(cacheKey);
+    if (cached != null) {
+      return Map<String, dynamic>.from(jsonDecode(cached) as Map);
+    }
+    final data = (await fetchGradeDetail(cookie, query: query)).data;
+    if (data == null) throw const ApiException('详细成绩数据为空');
+    await CacheService.set(cacheKey, jsonEncode(data));
+    return data;
+  }();
+  _pendingGradeDetails[cacheKey] = future;
+  future.then<void>(
+    (_) {
+      _pendingGradeDetails.remove(cacheKey);
+    },
+    onError: (Object error, StackTrace stackTrace) {
+      _pendingGradeDetails.remove(cacheKey);
+    },
+  );
+  return future;
 }
 
 Future<ApiResponse<Map<String, dynamic>>> fetchGrades(

@@ -92,9 +92,12 @@ class Score {
 
   static Map<String, String> _detailQuery(Map<String, dynamic> json) {
     const keys = ['jxb_id', 'kch_id', 'kch', 'xnm', 'xqm'];
+    final raw = json['raw'] is Map
+        ? Map<String, dynamic>.from(json['raw'] as Map)
+        : json;
     return {
       for (final key in keys)
-        if (json[key] != null && '${json[key]}'.isNotEmpty) key: '${json[key]}',
+        if (raw[key] != null && '${raw[key]}'.isNotEmpty) key: '${raw[key]}',
     };
   }
 
