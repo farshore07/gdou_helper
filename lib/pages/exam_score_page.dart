@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/exam.dart';
 import '../models/score.dart';
+import '../providers/auth_provider.dart';
 import '../providers/data_providers.dart';
+import '../services/api_service.dart';
 import '../widgets/semester_selector.dart';
 
 class ExamScorePage extends ConsumerWidget {
@@ -480,77 +482,140 @@ class _ScoresView extends StatelessWidget {
   }
 }
 
-class _ScoreRow extends StatelessWidget {
+class _ScoreRow extends ConsumerWidget {
   final Score score;
   const _ScoreRow({required this.score});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cs = Theme.of(context).colorScheme;
     final color = _scoreColor(cs, score.score);
     final hasNumericGrade = double.tryParse(score.gradeText) != null;
     final display = score.gradeText.isNotEmpty
         ? score.gradeText
         : score.score.toStringAsFixed(0);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 4,
-            height: 48,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(2),
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => _showDetail(context, ref),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 4,
+              height: 48,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    score.courseName,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: cs.onSurface,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '学分 ${score.credit.toStringAsFixed(1)} · ${score.category == ScoreCategory.elective ? '选修' : '必修'}',
+                    style: TextStyle(fontSize: 11, color: cs.outline),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(
-                  score.courseName,
+                  display,
                   style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w500,
-                    color: cs.onSurface,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: color,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4),
+                if (!hasNumericGrade && score.gradeText.isNotEmpty)
+                  Text(
+                    score.score.toStringAsFixed(0),
+                    style: TextStyle(fontSize: 11, color: cs.outline),
+                  ),
                 Text(
-                  '学分 ${score.credit.toStringAsFixed(1)} · ${score.category == ScoreCategory.elective ? '选修' : '必修'}',
-                  style: TextStyle(fontSize: 11, color: cs.outline),
+                  '绩点 ${score.gpaPoint.toStringAsFixed(1)}',
+                  style: TextStyle(fontSize: 12, color: cs.outline),
                 ),
               ],
             ),
-          ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                display,
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: color,
-                ),
-              ),
-              if (!hasNumericGrade && score.gradeText.isNotEmpty)
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDetail(BuildContext context, WidgetRef ref) {
+    final cookie = ref.read(authProvider).cookie;
+    if (cookie == null) return;
+    final future = fetchGradeDetail(cookie, query: score.detailQuery);
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => FutureBuilder(
+        future: future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const SizedBox(
+              height: 180,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
+          if (snapshot.hasError) {
+            return const SizedBox(
+              height: 180,
+              child: Center(child: Text('获取详细成绩失败')),
+            );
+          }
+          final data = snapshot.data?.data ?? const <String, dynamic>{};
+          final items = (data['items'] as List<dynamic>? ?? [])
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Text(
-                  score.score.toStringAsFixed(0),
-                  style: TextStyle(fontSize: 11, color: cs.outline),
+                  data['course_name'] as String? ?? score.courseName,
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-              Text(
-                '绩点 ${score.gpaPoint.toStringAsFixed(1)}',
-                style: TextStyle(fontSize: 12, color: cs.outline),
-              ),
-            ],
-          ),
-        ],
+                const SizedBox(height: 12),
+                for (final item in items)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(item['name'] as String? ?? ''),
+                    subtitle: Text(item['ratio'] as String? ?? ''),
+                    trailing: Text(item['score'] as String? ?? ''),
+                  ),
+                if (items.isEmpty)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('暂无分项成绩'),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

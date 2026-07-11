@@ -226,6 +226,17 @@ Future<ApiResponse<Map<String, dynamic>>> fetchTimetable(
 }
 
 // ── 成绩 ──
+Future<ApiResponse<Map<String, dynamic>>> fetchGradeDetail(
+  String cookie, {
+  Map<String, String> query = const {},
+}) async {
+  final response = await dio.post(
+    '/api/v1/jwxt/grade-detail',
+    data: {'cookie': cookie, 'query': query},
+  );
+  return _toResponse(response);
+}
+
 Future<ApiResponse<Map<String, dynamic>>> fetchGrades(
   String cookie,
   String academicYear,
