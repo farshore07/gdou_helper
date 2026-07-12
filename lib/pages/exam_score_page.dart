@@ -94,14 +94,18 @@ class _ExamTab extends ConsumerWidget {
       loading: () => _loadingWidget(context),
       error: (error, _) =>
           _errorWidget(context, error, () => ref.invalidate(examsProvider)),
-      data: (exams) => _ExamList(exams: exams),
+      data: (exams) => _ExamList(
+        exams: exams,
+        onRefresh: () => ref.read(examsProvider.notifier).refresh(),
+      ),
     );
   }
 }
 
 class _ExamList extends StatelessWidget {
   final List<Exam> exams;
-  const _ExamList({required this.exams});
+  final Future<void> Function() onRefresh;
+  const _ExamList({required this.exams, required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
@@ -112,31 +116,33 @@ class _ExamList extends StatelessWidget {
     final past =
         exams.where((exam) => _dateOnly(exam.date).isBefore(today)).toList()
           ..sort((a, b) => b.date.compareTo(a.date));
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-      children: [
-        _GroupHeader(title: '即将到来'),
-        if (upcoming.isEmpty)
-          _UpcomingEmpty()
-        else
-          ...upcoming.map(
-            (exam) => Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: _ExamCard(exam: exam),
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+        children: [
+          _GroupHeader(title: '即将到来'),
+          if (upcoming.isEmpty)
+            _UpcomingEmpty()
+          else
+            ...upcoming.map(
+              (exam) => Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _ExamCard(exam: exam),
+              ),
             ),
-          ),
-        if (past.isNotEmpty) ...[
-          const SizedBox(height: 20),
-          _GroupHeader(title: '已结束'),
-          ...past.map(
-            (exam) => Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: _ExamCard(exam: exam),
+          if (past.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _GroupHeader(title: '已结束'),
+            ...past.map(
+              (exam) => Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _ExamCard(exam: exam),
+              ),
             ),
-          ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
@@ -392,15 +398,23 @@ class _ScoreTab extends ConsumerWidget {
       loading: () => _loadingWidget(context),
       error: (error, _) =>
           _errorWidget(context, error, () => ref.invalidate(gradesProvider)),
-      data: (scores) =>
-          scores.isEmpty ? const _ScoresEmpty() : _ScoresView(scores: scores),
+      data: (scores) => scores.isEmpty
+          ? RefreshIndicator(
+              onRefresh: () => ref.read(gradesProvider.notifier).refresh(),
+              child: ListView(children: const [_ScoresEmpty()]),
+            )
+          : _ScoresView(
+              scores: scores,
+              onRefresh: () => ref.read(gradesProvider.notifier).refresh(),
+            ),
     );
   }
 }
 
 class _ScoresView extends StatelessWidget {
   final List<Score> scores;
-  const _ScoresView({required this.scores});
+  final Future<void> Function() onRefresh;
+  const _ScoresView({required this.scores, required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
@@ -415,7 +429,6 @@ class _ScoresView extends StatelessWidget {
     );
     final gpa = totalCredit > 0 ? weighted / totalCredit : 0.0;
     final gpaColor = _gpaColor(cs, gpa);
-
     return Column(
       children: [
         Container(
@@ -466,15 +479,18 @@ class _ScoresView extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 20),
-            itemCount: scores.length,
-            separatorBuilder: (_, _) => Container(
-              height: .5,
-              margin: const EdgeInsets.only(left: 16),
-              color: cs.outlineVariant.withAlpha(40),
+          child: RefreshIndicator(
+            onRefresh: onRefresh,
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+              itemCount: scores.length,
+              separatorBuilder: (_, _) => Container(
+                height: .5,
+                margin: const EdgeInsets.only(left: 16),
+                color: cs.outlineVariant.withAlpha(40),
+              ),
+              itemBuilder: (_, index) => _ScoreRow(score: scores[index]),
             ),
-            itemBuilder: (_, index) => _ScoreRow(score: scores[index]),
           ),
         ),
       ],

@@ -142,6 +142,18 @@ class ExamsNotifier extends AsyncNotifier<List<Exam>> {
         .map((e) => Exam.fromApiJson(e as Map<String, dynamic>))
         .toList();
   }
+
+  Future<void> refresh() async {
+    final auth = ref.read(authProvider);
+    if (!auth.isLoggedIn || auth.cookie == null) return;
+    final semester = ref.read(semesterProvider);
+    final exams = await _fetchExams(
+      'exams_${auth.username}_$semester',
+      auth.cookie!,
+      semester,
+    );
+    state = AsyncData(exams);
+  }
 }
 
 class GradesNotifier extends AsyncNotifier<List<Score>> {
@@ -185,6 +197,18 @@ class GradesNotifier extends AsyncNotifier<List<Score>> {
     return items
         .map((s) => Score.fromApiJson(s as Map<String, dynamic>, semester))
         .toList();
+  }
+
+  Future<void> refresh() async {
+    final auth = ref.read(authProvider);
+    if (!auth.isLoggedIn || auth.cookie == null) return;
+    final semester = ref.read(semesterProvider);
+    final scores = await _fetchGrades(
+      'grades_${auth.username}_$semester',
+      auth.cookie!,
+      semester,
+    );
+    state = AsyncData(scores);
   }
 }
 
