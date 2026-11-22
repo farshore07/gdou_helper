@@ -956,5 +956,27 @@ void main() {
       expect(find.text('第2周'), findsOneWidget);
       expect(find.text('算法分析'), findsOneWidget);
     });
+
+    test('本地缓存不因超过 7 天过期删除，仅在主动删除时清理', () async {
+      final oneYearAgo = DateTime.now()
+          .subtract(const Duration(days: 365))
+          .millisecondsSinceEpoch;
+      SharedPreferences.setMockInitialValues({
+        'cache_timetable_old': '[{"course_name":"高等数学"}]',
+        'cache_timetable_old_ts': oneYearAgo,
+      });
+
+      expect(
+        await CacheService.get('timetable_old'),
+        '[{"course_name":"高等数学"}]',
+      );
+
+      await CacheService.remove('timetable_old');
+      expect(await CacheService.get('timetable_old'), isNull);
+
+      await CacheService.set('grades_keep', '[]');
+      await CacheService.clearAll();
+      expect(await CacheService.get('grades_keep'), isNull);
+    });
   });
 }

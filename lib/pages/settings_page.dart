@@ -72,6 +72,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             subtitle: const Text('清除本地缓存并重新加载数据'),
             onTap: () async {
               await CacheService.clearAll();
+              ref.invalidate(timetableMetaProvider);
               ref.invalidate(timetableProvider);
               ref.invalidate(examsProvider);
               ref.invalidate(gradesProvider);
