@@ -105,6 +105,25 @@ void main() {
     dio.options.baseUrl = testServer;
   });
 
+  test('启动时默认选中当前学期，寒暑假沿用上一学期直到切换日', () {
+    for (final (date, expected) in [
+      (DateTime(2026, 2, 28), '2025-2026-1'),
+      (DateTime(2026, 3, 1), '2025-2026-2'),
+      (DateTime(2026, 8, 31), '2025-2026-2'),
+      (DateTime(2026, 9, 1), '2026-2027-1'),
+      (DateTime(2026, 11, 23), '2026-2027-1'),
+      (DateTime(2027, 1, 1), '2026-2027-1'),
+      (DateTime(2027, 3, 1), '2026-2027-2'),
+    ]) {
+      final container = ProviderContainer(overrides: [
+        semesterOptionsProvider.overrideWithValue(semestersForDate(date)),
+      ]);
+      addTearDown(container.dispose);
+      expect(container.read(semesterProvider), expected);
+      expect(container.read(semesterOptionsProvider), contains('2024-2025-1'));
+    }
+  });
+
   group('P2-3 单双周与跳周课表精确周次', () {
     test('优先使用后端 week_numbers，第 2 周不误判为有课', () {
       final course = Course.fromApiJson({

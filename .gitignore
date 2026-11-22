@@ -1,0 +1,7 @@
+# Flutter 生成文件
+/.dart_tool/
+/.flutter-plugins-dependencies
+/build/
+
+# 本地构建脚本
+/build-release.local.sh

@@ -8,6 +8,7 @@ class SemesterSelector extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final semesters = ref.watch(semesterOptionsProvider);
     final current = ref.watch(semesterProvider);
 
     return PopupMenuButton<String>(
@@ -15,7 +16,7 @@ class SemesterSelector extends ConsumerWidget {
       tooltip: '切换学期',
       icon: const Icon(Icons.filter_list),
       onSelected: (v) => ref.read(semesterProvider.notifier).select(v),
-      itemBuilder: (_) => allSemesters
+      itemBuilder: (_) => semesters
           .map((s) => PopupMenuItem(
                 value: s,
                 child: Row(

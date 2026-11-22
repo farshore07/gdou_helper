@@ -12,6 +12,7 @@ class SettingsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final semesters = ref.watch(semesterOptionsProvider);
     final semester = ref.watch(semesterProvider);
     final reminder = ref.watch(reminderProvider);
     final themeMode = ref.watch(themeModeProvider);
@@ -31,7 +32,7 @@ class SettingsPage extends ConsumerWidget {
             trailing: DropdownButton<String>(
               value: semester,
               underline: const SizedBox(),
-              items: allSemesters
+              items: semesters
                   .map((s) => DropdownMenuItem(
                         value: s,
                         child: Text(semesterLabel(s)),

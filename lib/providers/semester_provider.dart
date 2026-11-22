@@ -2,7 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class SemesterNotifier extends Notifier<String> {
   @override
-  String build() => '2025-2026-2';
+  String build() => ref.watch(semesterOptionsProvider).first;
 
   void select(String s) => state = s;
 }
@@ -10,13 +10,23 @@ class SemesterNotifier extends Notifier<String> {
 final semesterProvider =
     NotifierProvider<SemesterNotifier, String>(SemesterNotifier.new);
 
-const allSemesters = [
-  '2026-2027-1',
-  '2025-2026-2',
-  '2025-2026-1',
-  '2024-2025-2',
-  '2024-2025-1',
-];
+final semesterOptionsProvider = Provider<List<String>>(
+  (ref) => semestersForDate(DateTime.now()),
+);
+
+// 与无校历时的开学日期一致：9 月 1 日进入第一学期，3 月 1 日进入第二学期。
+List<String> semestersForDate(DateTime date) {
+  final year = date.month >= 9 ? date.year : date.year - 1;
+  final secondTerm = date.month >= 3 && date.month < 9;
+  return [
+    if (secondTerm) '$year-${year + 1}-2',
+    '$year-${year + 1}-1',
+    for (var previous = year - 1; previous >= 2024; previous--) ...[
+      '$previous-${previous + 1}-2',
+      '$previous-${previous + 1}-1',
+    ],
+  ];
+}
 
 String semesterLabel(String s) {
   final parts = s.split('-');
