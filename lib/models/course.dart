@@ -204,18 +204,15 @@ class Course {
         .trim();
     if (normalized.isEmpty) return const [];
 
-    final parts = <String>[];
-    for (final raw in normalized.split(',')) {
-      final trimmed = raw.trim();
-      if (trimmed.isEmpty) continue;
-      if ('周'.allMatches(trimmed).length > 1) {
-        parts.addAll(
-          trimmed.split(RegExp(r'\s+')).where((item) => item.isNotEmpty),
-        );
-      } else {
-        parts.add(trimmed);
-      }
-    }
+    // 只在完整周次与下一周次之间切分，范围和单双周后缀内部允许留白。
+    final parts = normalized
+        .replaceAllMapped(
+          RegExp(r'([周)])\s+(第|[0-9])'),
+          (match) => '${match[1]},${match[2]}',
+        )
+        .replaceAll(RegExp(r'\s+'), '')
+        .split(',')
+        .where((part) => part.isNotEmpty);
 
     // 处理 "1-5,7-9周(单)"：前段未带“周”且无单双标记时继承同组后续带“周”段的单双周属性
     final flags = parts

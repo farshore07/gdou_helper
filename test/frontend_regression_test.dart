@@ -183,6 +183,9 @@ void main() {
 
       expect(Course.parseWeekNumbers('第1-3周'), [1, 2, 3]);
       expect(Course.parseWeekNumbers('第4周 第8周'), [4, 8]);
+      expect(Course.parseWeekNumbers('第1周 至 第4周'), [1, 2, 3, 4]);
+      expect(Course.parseWeekNumbers('1-5周 (单周)'), [1, 3, 5]);
+      expect(Course.parseWeekNumbers('第1周　到　第4周（双周） 第7周 第9周'), [2, 4, 7, 9]);
       expect(Course.parseWeekNumbers('1-5单周'), [1, 3, 5]);
       expect(Course.parseWeekNumbers('1-5,7-9周(单)'), [1, 3, 5, 7, 9]);
       expect(Course.parseWeekNumbers('1-3周、6~8周(双)'), [1, 2, 3, 6, 8]);
