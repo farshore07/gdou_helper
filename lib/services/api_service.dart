@@ -7,11 +7,22 @@ import 'cache_service.dart';
 
 final dio = Dio(
   BaseOptions(
+    baseUrl: _normalizeHost(_envApiServer.trim()),
     connectTimeout: const Duration(seconds: 30),
     receiveTimeout: const Duration(seconds: 120),
     validateStatus: (s) => s != null && s < 600,
   ),
-);
+)..interceptors.add(InterceptorsWrapper(
+  onRequest: (options, handler) {
+    if (options.baseUrl.isEmpty) {
+      return handler.reject(DioException(
+        requestOptions: options,
+        error: const ApiException('未配置后端地址，请在构建时传入 API_SERVER'),
+      ));
+    }
+    handler.next(options);
+  },
+));
 
 // ── 请求冷却（同 URL+data 5s 内拦截重复请求；交互式认证接口不冷却） ──
 final _lastRequest = <String, DateTime>{};
@@ -78,6 +89,7 @@ bool isAuthenticationFailure(ApiException error) =>
 ApiException handleError(dynamic e) {
   if (e is ApiException) return e;
   if (e is DioException) {
+    if (e.error is ApiException) return e.error as ApiException;
     if (e.type == DioExceptionType.cancel) {
       return const ApiException('操作太频繁，请稍后再试');
     }
@@ -151,7 +163,7 @@ Future<String> loadApiServer() async {
   final sp = await SharedPreferences.getInstance();
   final configured = _envApiServer.trim().isNotEmpty
       ? _envApiServer.trim()
-      : (sp.getString('api_server') ?? const String.fromEnvironment('API_SERVER'));
+      : (sp.getString('api_server') ?? '').trim();
   _server = _normalizeHost(configured);
   dio.options.baseUrl = _server;
   if (!_dioReady) {
@@ -162,6 +174,7 @@ Future<String> loadApiServer() async {
 }
 
 String _normalizeHost(String host) {
+  if (host.isEmpty) return '';
   var h = host.startsWith('http') ? host : 'http://$host';
   while (h.endsWith('/')) {
     h = h.substring(0, h.length - 1);

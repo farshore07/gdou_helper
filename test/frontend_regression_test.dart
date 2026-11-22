@@ -100,7 +100,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    const testServer = 'https://test.example.invalid';
+    SharedPreferences.setMockInitialValues({'api_server': testServer});
+    dio.options.baseUrl = testServer;
   });
 
   group('P2-3 单双周与跳周课表精确周次', () {
