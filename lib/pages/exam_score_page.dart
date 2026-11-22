@@ -7,6 +7,7 @@ import '../providers/auth_provider.dart';
 import '../providers/data_providers.dart';
 import '../services/api_service.dart';
 import '../widgets/semester_selector.dart';
+import '../widgets/toast.dart';
 
 class ExamScorePage extends ConsumerWidget {
   const ExamScorePage({super.key});
@@ -582,62 +583,168 @@ class _ScoreRow extends ConsumerWidget {
     final cookie = auth.cookie;
     if (cookie == null) return;
     final detailId = score.detailQuery['jxb_id'] ?? score.id;
-    final future = fetchCachedGradeDetail(
-      'grade_detail_${auth.username}_$detailId',
-      cookie,
-      query: score.detailQuery,
-    );
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (context) => FutureBuilder(
-        future: future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const SizedBox(
-              height: 180,
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-          if (snapshot.hasError) {
-            return const SizedBox(
-              height: 180,
-              child: Center(child: Text('获取详细成绩失败')),
-            );
-          }
-          final data = snapshot.data ?? const <String, dynamic>{};
-          final items = (data['items'] as List<dynamic>? ?? [])
-              .map((item) => Map<String, dynamic>.from(item as Map))
-              .toList();
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  data['course_name'] as String? ?? score.courseName,
+      builder: (context) => _GradeDetailSheet(
+        cacheKey: 'grade_detail_${auth.username}_$detailId',
+        cookie: cookie,
+        courseName: score.courseName,
+        query: score.detailQuery,
+      ),
+    );
+  }
+}
+
+class _GradeDetailSheet extends StatefulWidget {
+  final String cacheKey;
+  final String cookie;
+  final String courseName;
+  final Map<String, String> query;
+
+  const _GradeDetailSheet({
+    required this.cacheKey,
+    required this.cookie,
+    required this.courseName,
+    required this.query,
+  });
+
+  @override
+  State<_GradeDetailSheet> createState() => _GradeDetailSheetState();
+}
+
+class _GradeDetailSheetState extends State<_GradeDetailSheet> {
+  Map<String, dynamic>? _data;
+  bool _loading = true;
+  bool _refreshing = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load(forceRefresh: false);
+  }
+
+  Future<void> _load({required bool forceRefresh}) async {
+    if (forceRefresh) {
+      setState(() {
+        _refreshing = true;
+        _error = null;
+      });
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final fresh = await fetchCachedGradeDetail(
+        widget.cacheKey,
+        widget.cookie,
+        query: widget.query,
+        forceRefresh: forceRefresh,
+      );
+      if (!mounted) return;
+      setState(() {
+        _data = fresh;
+        _loading = false;
+        _refreshing = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      final msg = handleError(e).message;
+      if (_data != null) {
+        setState(() => _refreshing = false);
+        Toast.error(context, '刷新分项成绩失败：$msg');
+      } else {
+        setState(() {
+          _loading = false;
+          _refreshing = false;
+          _error = msg;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading && _data == null) {
+      return const SizedBox(
+        height: 180,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_error != null && _data == null) {
+      return SizedBox(
+        height: 180,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('获取详细成绩失败：$_error'),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () => _load(forceRefresh: true),
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final data = _data ?? const <String, dynamic>{};
+    final items = (data['items'] as List<dynamic>? ?? [])
+        .map((item) => Map<String, dynamic>.from(item as Map))
+        .toList();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  data['course_name'] as String? ?? widget.courseName,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
-                const SizedBox(height: 12),
-                for (final item in items)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(item['name'] as String? ?? ''),
-                    subtitle: Text(item['ratio'] as String? ?? ''),
-                    trailing: Text(item['score'] as String? ?? ''),
-                  ),
-                if (items.isEmpty)
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('暂无分项成绩'),
-                    ),
-                  ),
-              ],
+              ),
+              if (_refreshing)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                IconButton(
+                  tooltip: '刷新分项成绩',
+                  icon: const Icon(Icons.refresh, size: 20),
+                  onPressed: () => _load(forceRefresh: true),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (final item in items)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(item['name'] as String? ?? ''),
+              subtitle: Text(item['ratio'] as String? ?? ''),
+              trailing: Text(item['score'] as String? ?? ''),
             ),
-          );
-        },
+          if (items.isEmpty)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('暂无分项成绩'),
+              ),
+            ),
+        ],
       ),
     );
   }

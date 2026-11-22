@@ -438,6 +438,7 @@ class GradesNotifier extends AsyncNotifier<List<Score>> {
       auth.cookie!,
       semester,
     );
+    markGradeDetailsStale('grade_detail_${auth.username}_');
     if (ref.mounted &&
         seq == _requestSeq &&
         ref.read(semesterProvider) == semester &&

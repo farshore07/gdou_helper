@@ -6,6 +6,7 @@ import 'package:timezone/timezone.dart' as tz;
 
 final _plugin = FlutterLocalNotificationsPlugin();
 bool _notificationsInitialized = false;
+Future<void>? _initFuture;
 
 const _reminderNotificationDetails = NotificationDetails(
   android: AndroidNotificationDetails(
@@ -22,23 +23,54 @@ const _reminderNotificationDetails = NotificationDetails(
   ),
 );
 
-Future<void> initNotifications() async {
-  if (_notificationsInitialized) return;
-  tz_data.initializeTimeZones();
-  tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
+Future<void> initNotifications() {
+  if (_notificationsInitialized) return Future<void>.value();
+  final pending = _initFuture;
+  if (pending != null) return pending;
+  final future = _doInitNotifications();
+  _initFuture = future;
+  future.whenComplete(() {
+    if (identical(_initFuture, future)) {
+      _initFuture = null;
+    }
+  });
+  return future;
+}
 
-  const android = AndroidInitializationSettings('ic_notification');
-  const ios = DarwinInitializationSettings(
-    requestAlertPermission: true,
-    requestBadgePermission: true,
-    requestSoundPermission: true,
-  );
-  await _plugin.initialize(
-    settings: const InitializationSettings(android: android, iOS: ios),
-  );
-  _notificationsInitialized = true;
+Future<void> _doInitNotifications() async {
+  try {
+    tz_data.initializeTimeZones();
+    tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
 
-  await ensureNotificationPermissions(requestExactAlarm: false);
+    const ios = DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
+
+    try {
+      await _plugin.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings('ic_notification'),
+          iOS: ios,
+        ),
+      );
+    } on PlatformException catch (e) {
+      if (e.code != 'invalid_icon') rethrow;
+      debugPrint('通知图标 ic_notification 不可用，回退至 @mipmap/ic_launcher');
+      await _plugin.initialize(
+        settings: const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          iOS: ios,
+        ),
+      );
+    }
+
+    _notificationsInitialized = true;
+    await ensureNotificationPermissions(requestExactAlarm: false);
+  } catch (e, st) {
+    debugPrint('初始化通知服务失败: $e\n$st');
+  }
 }
 
 Future<void> ensureNotificationPermissions({
@@ -91,6 +123,7 @@ Future<void> scheduleNotification({
   if (!_notificationsInitialized) {
     await initNotifications();
   }
+  if (!_notificationsInitialized) return;
 
   final tzDate = tz.TZDateTime.from(when, tz.local);
   final mode = androidScheduleMode ?? await resolveAndroidScheduleMode();
@@ -130,6 +163,7 @@ Future<void> showTestNotification() async {
   if (!_notificationsInitialized) {
     await initNotifications();
   }
+  if (!_notificationsInitialized) return;
   await _plugin.show(
     id: DateTime.now().millisecondsSinceEpoch % 100000,
     title: '测试提醒',
@@ -139,6 +173,9 @@ Future<void> showTestNotification() async {
 }
 
 Future<void> cancelAllNotifications() async {
+  if (!_notificationsInitialized && _initFuture != null) {
+    await initNotifications();
+  }
   if (!_notificationsInitialized) return;
   await _plugin.cancelAll();
 }

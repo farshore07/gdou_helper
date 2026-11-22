@@ -35,7 +35,8 @@ void _setupCooldownInterceptor() {
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) {
-        if (_cooldownBypassPaths.contains(options.path)) {
+        if (_cooldownBypassPaths.contains(options.path) ||
+            options.extra['bypassCooldown'] == true) {
           return handler.next(options);
         }
         final key = '${options.method}:${options.path}:${options.data}';
@@ -304,47 +305,101 @@ Future<ApiResponse<Map<String, dynamic>>> fetchTimetable(
 Future<ApiResponse<Map<String, dynamic>>> fetchGradeDetail(
   String cookie, {
   Map<String, String> query = const {},
+  bool bypassCooldown = false,
 }) async {
   final response = await dio.post(
     '/api/v1/jwxt/grade-detail',
     data: {'cookie': cookie, 'query': query},
+    options: bypassCooldown
+        ? Options(extra: const {'bypassCooldown': true})
+        : null,
   );
   return _toResponse(response);
 }
 
 final _pendingGradeDetails = <String, Future<Map<String, dynamic>>>{};
+final _staleGradeDetailPrefixes = <String, int>{};
+final _refreshedGradeDetailVersion = <String, int>{};
+int _gradeDetailStaleSeq = 0;
+
+/// 标记指定前缀（如 `grade_detail_<username>_`）下的分项缓存需在下一次打开时向后端复核刷新，
+/// 同时保留本地缓存用于离线或网络失败时回退。
+void markGradeDetailsStale(String prefix) {
+  _staleGradeDetailPrefixes[prefix] = ++_gradeDetailStaleSeq;
+}
+
+int? _matchingStaleVersion(String cacheKey) {
+  int? maxVersion;
+  for (final entry in _staleGradeDetailPrefixes.entries) {
+    if (cacheKey.startsWith(entry.key)) {
+      if (maxVersion == null || entry.value > maxVersion) {
+        maxVersion = entry.value;
+      }
+    }
+  }
+  return maxVersion;
+}
 
 Future<Map<String, dynamic>> fetchCachedGradeDetail(
   String cacheKey,
   String cookie, {
   Map<String, String> query = const {},
+  bool forceRefresh = false,
 }) {
-  final pending = _pendingGradeDetails[cacheKey];
+  final pendingKey = '$cacheKey:${forceRefresh ? 'refresh' : 'read'}';
+  final pending = _pendingGradeDetails[pendingKey];
   if (pending != null) return pending;
+
   final future = () async {
+    Map<String, dynamic>? cachedData;
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final decoded = Map<String, dynamic>.from(jsonDecode(cached) as Map);
       final cachedItems = decoded['items'];
       if (cachedItems is List && cachedItems.isNotEmpty) {
-        return decoded;
+        cachedData = decoded;
       }
     }
-    final data = (await fetchGradeDetail(cookie, query: query)).data;
-    if (data == null) throw const ApiException('详细成绩数据为空');
-    final items = data['items'];
-    if (items is List && items.isNotEmpty) {
-      await CacheService.set(cacheKey, jsonEncode(data));
+
+    final staleVersion = _matchingStaleVersion(cacheKey);
+    final isStale =
+        staleVersion != null &&
+        (_refreshedGradeDetailVersion[cacheKey] ?? 0) < staleVersion;
+
+    if (!forceRefresh && !isStale && cachedData != null) {
+      return cachedData;
     }
-    return data;
+
+    try {
+      final data = (await fetchGradeDetail(
+        cookie,
+        query: query,
+        bypassCooldown: forceRefresh || isStale,
+      )).data;
+      if (data == null) throw const ApiException('详细成绩数据为空');
+      final items = data['items'];
+      if (items is List && items.isNotEmpty) {
+        await CacheService.set(cacheKey, jsonEncode(data));
+      }
+      if (staleVersion != null) {
+        _refreshedGradeDetailVersion[cacheKey] = staleVersion;
+      }
+      return data;
+    } catch (_) {
+      // 非强制手动刷新且本地有缓存（如下拉刷新列表后又断网），优雅回退离线缓存
+      if (!forceRefresh && cachedData != null) {
+        return cachedData;
+      }
+      rethrow;
+    }
   }();
-  _pendingGradeDetails[cacheKey] = future;
+  _pendingGradeDetails[pendingKey] = future;
   future.then<void>(
     (_) {
-      _pendingGradeDetails.remove(cacheKey);
+      _pendingGradeDetails.remove(pendingKey);
     },
     onError: (Object error, StackTrace stackTrace) {
-      _pendingGradeDetails.remove(cacheKey);
+      _pendingGradeDetails.remove(pendingKey);
     },
   );
   return future;

@@ -84,8 +84,8 @@ class AboutPage extends ConsumerWidget {
           const SizedBox(height: 16),
           Text(
             '这是一个开源项目，仅用于学习用途。\n'
-            '我们不会收集、上传或分享任何个人信息。\n'
-            '所有数据仅存储在你的设备本地。',
+            '登录与查询请求发往配置的教务查询后端（无数据库留存），\n'
+            '课表、成绩等缓存保存在你的设备本地。',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: cs.outline.withAlpha(150)),
           ),

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -13,6 +14,52 @@ import '../services/notification_service.dart';
 const _prefCourseEnabledKey = 'reminder_course_enabled';
 const _prefExamEnabledKey = 'reminder_exam_enabled';
 const _prefScheduleSignatureKey = 'reminder_schedule_signature';
+
+/// 系统通知底层操作抽象，用于串行排程与并发打断测试注入。
+class ReminderNotificationBackend {
+  final Future<void> Function() cancelAll;
+  final Future<AndroidScheduleMode> Function() resolveMode;
+  final Future<void> Function({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime when,
+    required AndroidScheduleMode? androidScheduleMode,
+  })
+  schedule;
+  final Future<void> Function() yieldFrame;
+
+  const ReminderNotificationBackend({
+    required this.cancelAll,
+    required this.resolveMode,
+    required this.schedule,
+    required this.yieldFrame,
+  });
+
+  static final ReminderNotificationBackend live = ReminderNotificationBackend(
+    cancelAll: cancelAllNotifications,
+    resolveMode: resolveAndroidScheduleMode,
+    schedule: ({
+      required int id,
+      required String title,
+      required String body,
+      required DateTime when,
+      required AndroidScheduleMode? androidScheduleMode,
+    }) => scheduleNotification(
+      id: id,
+      title: title,
+      body: body,
+      when: when,
+      repeatWeekly: false,
+      androidScheduleMode: androidScheduleMode,
+    ),
+    yieldFrame: () => Future<void>.delayed(const Duration(milliseconds: 16)),
+  );
+}
+
+final reminderBackendProvider = Provider<ReminderNotificationBackend>(
+  (_) => ReminderNotificationBackend.live,
+);
 
 /// 单次排程的上课提醒数量上限（预留空间给考试提醒，低于 Android 单应用 500 闹钟限制）。
 const int defaultMaxCourseReminders = 300;
@@ -263,7 +310,9 @@ String computeReminderSignature(List<ScheduledReminder> reminders) {
 }
 
 class ReminderNotifier extends Notifier<ReminderState> {
-  int _scheduleSeq = 0;
+  int _desiredVersion = 0;
+  bool _pendingForce = false;
+  Future<void>? _activeWorker;
   Timer? _debounceTimer;
   String? _lastSignature;
 
@@ -272,6 +321,7 @@ class ReminderNotifier extends Notifier<ReminderState> {
     ref.onDispose(() {
       _debounceTimer?.cancel();
       _debounceTimer = null;
+      _desiredVersion++;
     });
     ref.listen(timetableProvider, (_, next) {
       next.whenData((_) => _scheduleDebounced());
@@ -293,10 +343,11 @@ class ReminderNotifier extends Notifier<ReminderState> {
 
   void _scheduleDebounced({bool force = false}) {
     if (!ref.mounted) return;
+    if (force) _pendingForce = true;
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 400), () {
       if (!ref.mounted) return;
-      _reschedule(force: force);
+      _enqueueReschedule();
     });
   }
 
@@ -326,7 +377,7 @@ class ReminderNotifier extends Notifier<ReminderState> {
         await ensureNotificationPermissions(requestExactAlarm: true);
       }
       _debounceTimer?.cancel();
-      await _reschedule(force: true);
+      await _enqueueReschedule(force: true);
     } catch (e) {
       debugPrint('更新上课提醒失败: $e');
     }
@@ -341,69 +392,113 @@ class ReminderNotifier extends Notifier<ReminderState> {
         await ensureNotificationPermissions(requestExactAlarm: true);
       }
       _debounceTimer?.cancel();
-      await _reschedule(force: true);
+      await _enqueueReschedule(force: true);
     } catch (e) {
       debugPrint('更新考试提醒失败: $e');
     }
   }
 
-  Future<void> _reschedule({bool force = false}) async {
-    if (!ref.mounted) return;
-    final seq = ++_scheduleSeq;
-    final currentState = state;
-    final courses = ref.read(timetableProvider).asData?.value ?? const [];
-    final exams = ref.read(examsProvider).asData?.value ?? const [];
-    final semester = ref.read(semesterProvider);
-    final meta = ref.read(timetableMetaProvider)[semester];
+  /// 立即将最新状态加入串行排程队列（供交互切换及测试调用）。
+  Future<void> rescheduleNow({bool force = false}) {
+    _debounceTimer?.cancel();
+    return _enqueueReschedule(force: force);
+  }
 
-    try {
-      final pending = <ScheduledReminder>[
-        if (currentState.courseEnabled)
-          ...buildCourseReminders(
-            courses,
-            semester: semester,
-            semesterStartDate: meta?.semesterStartDate,
-            periodStartTimes: meta?.periodStartTimes,
-          ),
-        if (currentState.examEnabled) ...buildExamReminders(exams),
-      ];
+  Future<void> _enqueueReschedule({bool force = false}) {
+    if (!ref.mounted) return Future<void>.value();
+    if (force) _pendingForce = true;
+    _desiredVersion++;
+    _activeWorker ??= _drainRescheduleQueue().whenComplete(() {
+      _activeWorker = null;
+    });
+    return _activeWorker!;
+  }
 
-      final signature = computeReminderSignature(pending);
-      if (!force && signature == _lastSignature) {
-        return;
-      }
+  /// 串行执行系统通知的清除与写入：
+  /// 1. 同一时刻只允许一个排程批次操作底层通知，避免并发 cancelAll 与 schedule 交错；
+  /// 2. 执行 cancelAll 前先清除旧指纹，确保中途被打断（如 A -> B -> A）时不会误判为已排程；
+  /// 3. 仅当整批全部写入完毕且未出现更新批次时，才持久化新指纹。
+  Future<void> _drainRescheduleQueue() async {
+    final backend = ref.read(reminderBackendProvider);
+    var processedVersion = -1;
 
-      await cancelAllNotifications();
-      if (!ref.mounted || seq != _scheduleSeq) return;
+    while (ref.mounted && processedVersion != _desiredVersion) {
+      final targetVersion = _desiredVersion;
+      final force = _pendingForce;
+      _pendingForce = false;
+      processedVersion = targetVersion;
 
-      final scheduleMode = pending.isEmpty
-          ? null
-          : await resolveAndroidScheduleMode();
-      if (!ref.mounted || seq != _scheduleSeq) return;
+      final currentState = state;
+      final courses = ref.read(timetableProvider).asData?.value ?? const [];
+      final exams = ref.read(examsProvider).asData?.value ?? const [];
+      final semester = ref.read(semesterProvider);
+      final meta = ref.read(timetableMetaProvider)[semester];
 
-      for (var i = 0; i < pending.length; i++) {
-        if (!ref.mounted || seq != _scheduleSeq) return;
-        final item = pending[i];
-        await scheduleNotification(
-          id: item.id,
-          title: item.title,
-          body: item.body,
-          when: item.when,
-          repeatWeekly: false,
-          androidScheduleMode: scheduleMode,
-        );
-        // 每排程 8 条主动让出一个渲染帧，避免大量平台通道写入阻塞 UI 滑动
-        if ((i + 1) % 8 == 0) {
-          await Future<void>.delayed(const Duration(milliseconds: 16));
+      try {
+        final pending = <ScheduledReminder>[
+          if (currentState.courseEnabled)
+            ...buildCourseReminders(
+              courses,
+              semester: semester,
+              semesterStartDate: meta?.semesterStartDate,
+              periodStartTimes: meta?.periodStartTimes,
+            ),
+          if (currentState.examEnabled) ...buildExamReminders(exams),
+        ];
+
+        final signature = computeReminderSignature(pending);
+        if (!force && signature == _lastSignature) {
+          continue;
         }
-      }
 
-      if (!ref.mounted || seq != _scheduleSeq) return;
-      _lastSignature = signature;
-      final sp = await SharedPreferences.getInstance();
-      await sp.setString(_prefScheduleSignatureKey, signature);
-    } catch (e) {
-      debugPrint('排程提醒通知失败: $e');
+        // 清空系统通知前必须先让旧指纹失效，防止后续切回旧学期时跳过重排
+        _lastSignature = null;
+        final sp = await SharedPreferences.getInstance();
+        await sp.remove(_prefScheduleSignatureKey);
+        if (!ref.mounted) return;
+        if (targetVersion != _desiredVersion) continue;
+
+        await backend.cancelAll();
+        if (!ref.mounted) return;
+        if (targetVersion != _desiredVersion) continue;
+
+        final scheduleMode = pending.isEmpty
+            ? null
+            : await backend.resolveMode();
+        if (!ref.mounted) return;
+        if (targetVersion != _desiredVersion) continue;
+
+        var interrupted = false;
+        for (var i = 0; i < pending.length; i++) {
+          if (!ref.mounted) return;
+          if (targetVersion != _desiredVersion) {
+            interrupted = true;
+            break;
+          }
+          final item = pending[i];
+          await backend.schedule(
+            id: item.id,
+            title: item.title,
+            body: item.body,
+            when: item.when,
+            androidScheduleMode: scheduleMode,
+          );
+          // 每排程 8 条主动让出一个渲染帧，避免大量平台通道写入阻塞 UI 滑动
+          if ((i + 1) % 8 == 0) {
+            await backend.yieldFrame();
+          }
+        }
+
+        if (!ref.mounted) return;
+        if (interrupted || targetVersion != _desiredVersion) {
+          continue;
+        }
+
+        _lastSignature = signature;
+        await sp.setString(_prefScheduleSignatureKey, signature);
+      } catch (e) {
+        debugPrint('排程提醒通知失败: $e');
+      }
     }
   }
 }

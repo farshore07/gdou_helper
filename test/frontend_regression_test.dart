@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -1023,8 +1024,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(LegalDocumentPage), findsOneWidget);
-      expect(find.text('一、信息处理范围与用途'), findsOneWidget);
+      expect(find.text('一、信息处理与网络传输'), findsOneWidget);
       expect(find.textContaining('无数据库架构'), findsOneWidget);
+      expect(find.textContaining('SharedPreferences'), findsOneWidget);
 
       // 返回关于页
       await tester.pageBack();
@@ -1088,4 +1090,235 @@ void main() {
       expect(sp.getString('app_theme_mode'), 'light');
     });
   });
+
+  group('提醒串行重排打断恢复与成绩分项显式刷新', () {
+    test('快速切换 A -> B(中途打断) -> A 后，系统通知完整保留 A 且无 B 残留', () async {
+      // 模拟系统通知存储，并验证任意时刻不会发生并发写入
+      final activeNotifications = <int, String>{};
+      var inFlightOps = 0;
+      var maxConcurrentOps = 0;
+      final bWritingStarted = Completer<void>();
+      final releaseBWrite = Completer<void>();
+
+      final fakeBackend = ReminderNotificationBackend(
+        cancelAll: () async {
+          inFlightOps++;
+          if (inFlightOps > maxConcurrentOps) maxConcurrentOps = inFlightOps;
+          activeNotifications.clear();
+          inFlightOps--;
+        },
+        resolveMode: () async => AndroidScheduleMode.exactAllowWhileIdle,
+        schedule: ({
+          required int id,
+          required String title,
+          required String body,
+          required DateTime when,
+          required AndroidScheduleMode? androidScheduleMode,
+        }) async {
+          inFlightOps++;
+          if (inFlightOps > maxConcurrentOps) maxConcurrentOps = inFlightOps;
+          activeNotifications[id] = body;
+          if (body.contains('学期B课程') && !bWritingStarted.isCompleted) {
+            bWritingStarted.complete();
+            await releaseBWrite.future;
+          }
+          inFlightOps--;
+        },
+        yieldFrame: () async {},
+      );
+
+      final futureDate = DateTime.now().add(const Duration(days: 5));
+      final examA1 = Exam(
+        id: 'A1',
+        courseName: '学期A课程1',
+        date: futureDate,
+        startTime: const TimeOfDay(hour: 9, minute: 0),
+        endTime: const TimeOfDay(hour: 11, minute: 0),
+        location: 'A楼101',
+      );
+      final examA2 = Exam(
+        id: 'A2',
+        courseName: '学期A课程2',
+        date: futureDate.add(const Duration(days: 1)),
+        startTime: const TimeOfDay(hour: 14, minute: 30),
+        endTime: const TimeOfDay(hour: 16, minute: 30),
+        location: 'A楼102',
+      );
+      final examB1 = Exam(
+        id: 'B1',
+        courseName: '学期B课程1',
+        date: futureDate.add(const Duration(days: 2)),
+        startTime: const TimeOfDay(hour: 9, minute: 0),
+        endTime: const TimeOfDay(hour: 11, minute: 0),
+        location: 'B楼201',
+      );
+      final examB2 = Exam(
+        id: 'B2',
+        courseName: '学期B课程2',
+        date: futureDate.add(const Duration(days: 3)),
+        startTime: const TimeOfDay(hour: 14, minute: 30),
+        endTime: const TimeOfDay(hour: 16, minute: 30),
+        location: 'B楼202',
+      );
+
+      final container = ProviderContainer(
+        overrides: [
+          authProvider.overrideWith(
+            () => _MockAuthNotifier(const AuthState()),
+          ),
+          reminderBackendProvider.overrideWithValue(fakeBackend),
+          timetableProvider.overrideWith(_StaticEmptyTimetableNotifier.new),
+          examsProvider.overrideWith(
+            () => _SemesterSwitchExamsNotifier({
+              '2025-2026-1': [examA1, examA2],
+              '2025-2026-2': [examB1, examB2],
+            }),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      // 保持相关 provider 活跃
+      final subReminder = container.listen(reminderProvider, (_, _) {});
+      final subExams = container.listen(examsProvider, (_, _) {});
+      addTearDown(() {
+        subReminder.close();
+        subExams.close();
+      });
+
+      // 1. 排好学期 A
+      container.read(semesterProvider.notifier).select('2025-2026-1');
+      await container.read(examsProvider.future);
+      await container.read(reminderProvider.notifier).rescheduleNow();
+
+      expect(activeNotifications.length, 2);
+      expect(
+        activeNotifications.values.every((v) => v.contains('学期A课程')),
+        isTrue,
+      );
+
+      // 2. 切到学期 B，等 B 清空系统通知并写到第 1 条时挂起
+      container.read(semesterProvider.notifier).select('2025-2026-2');
+      await container.read(examsProvider.future);
+      final bRun = container.read(reminderProvider.notifier).rescheduleNow();
+      await bWritingStarted.future;
+
+      // 3. 在 B 尚未写完前立即切回学期 A 并触发重排
+      container.read(semesterProvider.notifier).select('2025-2026-1');
+      await container.read(examsProvider.future);
+      final aRun = container.read(reminderProvider.notifier).rescheduleNow();
+
+      // 放行 B 的挂起操作，等待串行队列全部排空
+      releaseBWrite.complete();
+      await Future.wait([bRun, aRun]);
+
+      // 最终必须严格保留完整的 2 条学期 A 通知，不能漏掉也不能残留 B，且全程串行无并发
+      expect(maxConcurrentOps, 1);
+      expect(activeNotifications.length, 2);
+      expect(
+        activeNotifications.values.where((v) => v.contains('学期A课程')).length,
+        2,
+      );
+      expect(
+        activeNotifications.values.where((v) => v.contains('学期B课程')),
+        isEmpty,
+      );
+    });
+
+    test('成绩分项支持显式刷新与列表刷新联动更新缓存，断网时回退离线缓存', () async {
+      final originalAdapter = dio.httpClientAdapter;
+      addTearDown(() => dio.httpClientAdapter = originalAdapter);
+
+      var serverScore = '85';
+      var failNext = false;
+      var networkCalls = 0;
+
+      dio.httpClientAdapter = _FakeHttpAdapter((options) async {
+        networkCalls++;
+        if (failNext) {
+          return _jsonResponse(502, {
+            'code': 'JWXT_UPSTREAM_ERROR',
+            'message': '教务系统维护中',
+            'data': null,
+          });
+        }
+        return _jsonResponse(200, {
+          'code': 'OK',
+          'message': 'ok',
+          'data': {
+            'course_name': '高等数学',
+            'items': [
+              {'name': '期末成绩', 'ratio': '100%', 'score': serverScore},
+            ],
+          },
+        });
+      });
+
+      const cacheKey = 'grade_detail_u2025_J100';
+
+      // 1. 首次拉取并缓存 85
+      final first = await fetchCachedGradeDetail(cacheKey, 'JSESSIONID=OK');
+      expect((first['items'] as List).first['score'], '85');
+      expect(networkCalls, 1);
+
+      // 2. 服务端改分为 92，普通读取默认命中离线缓存
+      serverScore = '92';
+      final cachedRead = await fetchCachedGradeDetail(
+        cacheKey,
+        'JSESSIONID=OK',
+      );
+      expect((cachedRead['items'] as List).first['score'], '85');
+      expect(networkCalls, 1);
+
+      // 3. 显式刷新（弹窗刷新按钮）重新请求并覆盖缓存
+      final forced = await fetchCachedGradeDetail(
+        cacheKey,
+        'JSESSIONID=OK',
+        forceRefresh: true,
+      );
+      expect((forced['items'] as List).first['score'], '92');
+      expect(networkCalls, 2);
+
+      // 验证缓存已更新为 92
+      final afterForced = await fetchCachedGradeDetail(
+        cacheKey,
+        'JSESSIONID=OK',
+      );
+      expect((afterForced['items'] as List).first['score'], '92');
+      expect(networkCalls, 2);
+
+      // 4. 模拟下拉刷新成绩列表（标记 stale），但此时网络异常 -> 自动回退离线缓存 92
+      serverScore = '96';
+      markGradeDetailsStale('grade_detail_u2025_');
+      failNext = true;
+      final offlineFallback = await fetchCachedGradeDetail(
+        cacheKey,
+        'JSESSIONID=OK',
+      );
+      expect((offlineFallback['items'] as List).first['score'], '92');
+      expect(networkCalls, 3);
+
+      // 5. 网络恢复后再次打开，因上次未刷新成功仍会重新拉取最新 96 并更新缓存
+      failNext = false;
+      final updated = await fetchCachedGradeDetail(cacheKey, 'JSESSIONID=OK');
+      expect((updated['items'] as List).first['score'], '96');
+      expect(networkCalls, 4);
+    });
+  });
+}
+
+class _StaticEmptyTimetableNotifier extends TimetableNotifier {
+  @override
+  Future<List<Course>> build() async => const [];
+}
+
+class _SemesterSwitchExamsNotifier extends ExamsNotifier {
+  final Map<String, List<Exam>> bySemester;
+  _SemesterSwitchExamsNotifier(this.bySemester);
+
+  @override
+  Future<List<Exam>> build() async {
+    final semester = ref.watch(semesterProvider);
+    return bySemester[semester] ?? const [];
+  }
 }
