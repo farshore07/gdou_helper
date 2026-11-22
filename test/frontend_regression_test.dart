@@ -16,13 +16,16 @@ import 'package:gdou_helper/pages/about_page.dart';
 import 'package:gdou_helper/pages/legal_document_page.dart';
 import 'package:gdou_helper/pages/login_page.dart';
 import 'package:gdou_helper/pages/schedule_page.dart';
+import 'package:gdou_helper/pages/settings_page.dart';
 import 'package:gdou_helper/pages/shell.dart';
 import 'package:gdou_helper/providers/auth_provider.dart';
 import 'package:gdou_helper/providers/data_providers.dart';
 import 'package:gdou_helper/providers/reminder_provider.dart';
 import 'package:gdou_helper/providers/semester_provider.dart';
+import 'package:gdou_helper/providers/theme_provider.dart';
 import 'package:gdou_helper/services/api_service.dart';
 import 'package:gdou_helper/services/cache_service.dart';
+import 'package:gdou_helper/theme.dart';
 
 class _MockAuthNotifier extends AuthNotifier {
   final AuthState initial;
@@ -574,6 +577,13 @@ void main() {
       );
       expect(capped.length, 5);
       expect(capped.last.when, DateTime(2026, 3, 30, 7, 55));
+
+      // 验证提醒签名在内容一致时稳定、发生变化时不同（用于跳过无变化重排）
+      final sig1 = computeReminderSignature(capped);
+      final sig2 = computeReminderSignature(List.of(capped));
+      final sig3 = computeReminderSignature(fullSemester);
+      expect(sig1, sig2);
+      expect(sig1, isNot(sig3));
     });
   });
 
@@ -1029,6 +1039,53 @@ void main() {
       expect(find.byType(LegalDocumentPage), findsOneWidget);
       expect(find.text('一、服务性质与声明'), findsOneWidget);
       expect(find.textContaining('非官方'), findsOneWidget);
+    });
+  });
+
+  group('设置页面深色模式切换与持久化', () {
+    testWidgets('切换深色模式实时生效并持久化，重启后恢复', (tester) async {
+      Widget buildTestApp() => ProviderScope(
+        child: Consumer(
+          builder: (context, ref, _) {
+            final mode = ref.watch(themeModeProvider);
+            return MaterialApp(
+              theme: theme,
+              darkTheme: darkTheme,
+              themeMode: mode,
+              home: const SettingsPage(),
+            );
+          },
+        ),
+      );
+
+      await tester.pumpWidget(buildTestApp());
+      await tester.pumpAndSettle();
+
+      Brightness currentBrightness() =>
+          Theme.of(tester.element(find.byType(SettingsPage))).brightness;
+
+      // 默认浅色（测试环境 platformBrightness 为 light）
+      expect(currentBrightness(), Brightness.light);
+
+      // 打开深色模式开关
+      await tester.tap(find.text('深色模式'));
+      await tester.pumpAndSettle();
+      expect(currentBrightness(), Brightness.dark);
+
+      final sp = await SharedPreferences.getInstance();
+      expect(sp.getString('app_theme_mode'), 'dark');
+
+      // 重建整个 ProviderScope 模拟重启 App，应自动恢复为深色模式
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(buildTestApp());
+      await tester.pumpAndSettle();
+      expect(currentBrightness(), Brightness.dark);
+
+      // 再次关闭深色模式开关，切回浅色并持久化
+      await tester.tap(find.text('深色模式'));
+      await tester.pumpAndSettle();
+      expect(currentBrightness(), Brightness.light);
+      expect(sp.getString('app_theme_mode'), 'light');
     });
   });
 }

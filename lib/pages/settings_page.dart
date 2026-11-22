@@ -4,21 +4,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/data_providers.dart';
 import '../providers/semester_provider.dart';
 import '../providers/reminder_provider.dart';
+import '../providers/theme_provider.dart';
 import '../services/cache_service.dart';
 
-class SettingsPage extends ConsumerStatefulWidget {
+class SettingsPage extends ConsumerWidget {
   const SettingsPage({super.key});
-  @override
-  ConsumerState<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends ConsumerState<SettingsPage> {
-  bool _darkMode = false;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final semester = ref.watch(semesterProvider);
     final reminder = ref.watch(reminderProvider);
+    final themeMode = ref.watch(themeModeProvider);
+    final isDarkMode =
+        themeMode == ThemeMode.dark ||
+        (themeMode == ThemeMode.system &&
+            Theme.of(context).brightness == Brightness.dark);
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -61,8 +61,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           SwitchListTile(
             secondary: const Icon(Icons.dark_mode_outlined),
             title: const Text('深色模式'),
-            value: _darkMode,
-            onChanged: (v) => setState(() => _darkMode = v),
+            value: isDarkMode,
+            onChanged: (v) =>
+                ref.read(themeModeProvider.notifier).setDarkMode(v),
           ),
           const Divider(),
           const _Header('数据'),

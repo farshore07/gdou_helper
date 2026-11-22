@@ -62,7 +62,7 @@ Future<void> ensureNotificationPermissions({
   }
 }
 
-Future<AndroidScheduleMode> _resolveAndroidScheduleMode() async {
+Future<AndroidScheduleMode> resolveAndroidScheduleMode() async {
   final androidImpl = _plugin
       .resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin
@@ -85,6 +85,7 @@ Future<void> scheduleNotification({
   required String body,
   required DateTime when,
   bool repeatWeekly = false,
+  AndroidScheduleMode? androidScheduleMode,
 }) async {
   if (!when.isAfter(DateTime.now())) return;
   if (!_notificationsInitialized) {
@@ -92,7 +93,7 @@ Future<void> scheduleNotification({
   }
 
   final tzDate = tz.TZDateTime.from(when, tz.local);
-  final mode = await _resolveAndroidScheduleMode();
+  final mode = androidScheduleMode ?? await resolveAndroidScheduleMode();
   final matchComponents = repeatWeekly
       ? DateTimeComponents.dayOfWeekAndTime
       : null;
