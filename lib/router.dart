@@ -1,11 +1,13 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'config/legal_documents.dart';
 import 'pages/login_page.dart';
 import 'pages/shell.dart';
 import 'pages/schedule_page.dart';
 import 'pages/exam_score_page.dart';
 import 'pages/about_page.dart';
+import 'pages/legal_document_page.dart';
 import 'pages/more_page.dart';
 import 'pages/settings_page.dart';
 
@@ -43,6 +45,16 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/login', builder: (_, _) => const LoginPage()),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
       GoRoute(path: '/about', builder: (_, _) => const AboutPage()),
+      GoRoute(
+        path: '/legal/privacy',
+        builder: (_, _) =>
+            const LegalDocumentPage(type: LegalDocumentType.privacy),
+      ),
+      GoRoute(
+        path: '/legal/terms',
+        builder: (_, _) =>
+            const LegalDocumentPage(type: LegalDocumentType.terms),
+      ),
     ],
   );
 });

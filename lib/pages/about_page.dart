@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config/app_config.dart';
+import '../config/legal_documents.dart';
 import '../providers/update_provider.dart';
 import '../widgets/toast.dart';
+import 'legal_document_page.dart';
 
 class AboutPage extends ConsumerWidget {
   const AboutPage({super.key});
@@ -41,7 +44,36 @@ class AboutPage extends ConsumerWidget {
           const Divider(indent: 48, endIndent: 48),
           _info('数据来源：广东海洋大学教务系统', Icons.cloud_outlined),
           _info('仅限个人学习使用', Icons.verified_user_outlined),
-          const SizedBox(height: 24),
+          const Divider(indent: 48, endIndent: 48),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.privacy_tip_outlined, size: 20),
+                  title: const Text('隐私声明', style: TextStyle(fontSize: 14)),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: cs.outline,
+                  ),
+                  onTap: () =>
+                      _openLegalDocument(context, LegalDocumentType.privacy),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.description_outlined, size: 20),
+                  title: const Text('用户协议', style: TextStyle(fontSize: 14)),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: cs.outline,
+                  ),
+                  onTap: () =>
+                      _openLegalDocument(context, LegalDocumentType.terms),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 16),
           TextButton.icon(
             onPressed: () => _openUrl(AppConfig.githubRepoUrl),
@@ -57,6 +89,7 @@ class AboutPage extends ConsumerWidget {
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: cs.outline.withAlpha(150)),
           ),
+          const SizedBox(height: 32),
         ],
       ),
     );
@@ -246,7 +279,21 @@ class AboutPage extends ConsumerWidget {
     );
   }
 
-  // ── 外部链接 ──
+  // ── 外部链接与协议页面 ──
+
+  void _openLegalDocument(BuildContext context, LegalDocumentType type) {
+    final path = switch (type) {
+      LegalDocumentType.privacy => '/legal/privacy',
+      LegalDocumentType.terms => '/legal/terms',
+    };
+    if (GoRouter.maybeOf(context) != null) {
+      context.push(path);
+      return;
+    }
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => LegalDocumentPage(type: type)));
+  }
 
   void _openUrl(String url) async {
     final uri = Uri.parse(url);

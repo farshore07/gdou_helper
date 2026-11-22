@@ -9,8 +9,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:gdou_helper/config/legal_documents.dart';
 import 'package:gdou_helper/models/course.dart';
 import 'package:gdou_helper/models/exam.dart';
+import 'package:gdou_helper/pages/about_page.dart';
+import 'package:gdou_helper/pages/legal_document_page.dart';
 import 'package:gdou_helper/pages/login_page.dart';
 import 'package:gdou_helper/pages/schedule_page.dart';
 import 'package:gdou_helper/pages/shell.dart';
@@ -977,6 +980,55 @@ void main() {
       await CacheService.set('grades_keep', '[]');
       await CacheService.clearAll();
       expect(await CacheService.get('grades_keep'), isNull);
+    });
+  });
+
+  group('关于页面隐私声明与用户协议', () {
+    testWidgets('点击隐私声明与用户协议按钮可分别打开对应内容页并返回', (tester) async {
+      final router = GoRouter(
+        initialLocation: '/about',
+        routes: [
+          GoRoute(path: '/about', builder: (_, _) => const AboutPage()),
+          GoRoute(
+            path: '/legal/privacy',
+            builder: (_, _) =>
+                const LegalDocumentPage(type: LegalDocumentType.privacy),
+          ),
+          GoRoute(
+            path: '/legal/terms',
+            builder: (_, _) =>
+                const LegalDocumentPage(type: LegalDocumentType.terms),
+          ),
+        ],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(child: MaterialApp.router(routerConfig: router)),
+      );
+      await tester.pumpAndSettle();
+
+      // 滚动到隐私声明入口并点击进入
+      await tester.scrollUntilVisible(find.text('隐私声明'), 200);
+      await tester.tap(find.text('隐私声明'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LegalDocumentPage), findsOneWidget);
+      expect(find.text('一、信息处理范围与用途'), findsOneWidget);
+      expect(find.textContaining('无数据库架构'), findsOneWidget);
+
+      // 返回关于页
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(AboutPage), findsOneWidget);
+
+      // 点击用户协议进入
+      await tester.scrollUntilVisible(find.text('用户协议'), 200);
+      await tester.tap(find.text('用户协议'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LegalDocumentPage), findsOneWidget);
+      expect(find.text('一、服务性质与声明'), findsOneWidget);
+      expect(find.textContaining('非官方'), findsOneWidget);
     });
   });
 }
