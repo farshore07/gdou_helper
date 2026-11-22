@@ -134,13 +134,18 @@ class Course {
     final periodsRaw = json['periods'] as String? ?? '';
     final periods = _parseRange(periodsRaw);
 
-    // 优先使用后端返回的精确 week_numbers；旧缓存缺失时再解析 weeks 文本
+    // 优先使用后端返回的精确 week_numbers；缺失或为空时解析 weeks 原文
     var exactWeeks = _extractWeekNumbers(json['week_numbers']);
     if (exactWeeks.isEmpty && weeksRaw.isNotEmpty) {
       exactWeeks = parseWeekNumbers(weeksRaw);
     }
-    final startWeek = exactWeeks.isNotEmpty ? exactWeeks.first : 1;
-    final endWeek = exactWeeks.isNotEmpty ? exactWeeks.last : 18;
+    // 仅有明确周次时启用对应范围；有原始周次文本但无法解析时不误判为 1-18 全周有效
+    final startWeek = exactWeeks.isNotEmpty
+        ? exactWeeks.first
+        : (weeksRaw.isEmpty ? 1 : 0);
+    final endWeek = exactWeeks.isNotEmpty
+        ? exactWeeks.last
+        : (weeksRaw.isEmpty ? 18 : 0);
 
     final name = json['course_name'] as String? ?? '';
     return Course(
@@ -181,43 +186,88 @@ class Course {
     return List<int>.unmodifiable(sorted);
   }
 
-  /// 解析周次文本为有序精确周次列表：支持 "1-9周(单)"、"2-10周(双)"、"1-5周,8-12周"、"13周" 等格式。
+  /// 解析周次文本为有序精确周次列表：支持 "第4周"、"1-9周(单)"、"1-5,7-9周(单)"、"1-5单周"、"第4周 第8周" 等格式。
   static List<int> parseWeekNumbers(String s) {
     final normalized = s
-        .replaceAll('周', '')
         .replaceAll('，', ',')
+        .replaceAll('、', ',')
+        .replaceAll(';', ',')
+        .replaceAll('；', ',')
         .replaceAll('（', '(')
         .replaceAll('）', ')')
+        .replaceAll('～', '-')
+        .replaceAll('~', '-')
+        .replaceAll('—', '-')
+        .replaceAll('–', '-')
+        .replaceAll('至', '-')
+        .replaceAll('到', '-')
         .trim();
     if (normalized.isEmpty) return const [];
 
+    final parts = <String>[];
+    for (final raw in normalized.split(',')) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) continue;
+      if ('周'.allMatches(trimmed).length > 1) {
+        parts.addAll(
+          trimmed.split(RegExp(r'\s+')).where((item) => item.isNotEmpty),
+        );
+      } else {
+        parts.add(trimmed);
+      }
+    }
+
+    // 处理 "1-5,7-9周(单)"：前段未带“周”且无单双标记时继承同组后续带“周”段的单双周属性
+    final flags = parts
+        .map(
+          (part) => (
+            text: part,
+            isOdd: part.contains('单'),
+            isEven: part.contains('双'),
+          ),
+        )
+        .toList();
+    for (var i = flags.length - 2; i >= 0; i--) {
+      if (!flags[i].isOdd && !flags[i].isEven && !flags[i].text.contains('周')) {
+        flags[i] = (
+          text: flags[i].text,
+          isOdd: flags[i + 1].isOdd,
+          isEven: flags[i + 1].isEven,
+        );
+      }
+    }
+
     final seen = <int>{};
-    for (final rawPart in normalized.split(',')) {
-      var part = rawPart.trim();
-      if (part.isEmpty) continue;
-      final isOdd = part.contains('(单)') || part.contains('单');
-      final isEven = part.contains('(双)') || part.contains('双');
-      part = part
+    for (final seg in flags) {
+      final cleaned = seg.text
+          .replaceAll('第', '')
+          .replaceAll('周', '')
           .replaceAll('(单)', '')
           .replaceAll('(双)', '')
           .replaceAll('单', '')
           .replaceAll('双', '')
+          .replaceAll('(', '')
+          .replaceAll(')', '')
+          .replaceAll(RegExp(r'\s+'), '')
           .trim();
-      if (part.contains('-')) {
-        final range = part.split('-');
+      if (cleaned.isEmpty) continue;
+      if (cleaned.contains('-')) {
+        final range = cleaned.split('-');
         final a = int.tryParse(range[0].trim()) ?? 0;
         final b = range.length > 1 ? (int.tryParse(range[1].trim()) ?? a) : a;
-        for (var w = a; w <= b; w++) {
+        final start = a <= b ? a : b;
+        final end = a <= b ? b : a;
+        for (var w = start; w <= end; w++) {
           if (w <= 0) continue;
-          if (isOdd && w.isEven) continue;
-          if (isEven && w.isOdd) continue;
+          if (seg.isOdd && w.isEven) continue;
+          if (seg.isEven && w.isOdd) continue;
           seen.add(w);
         }
       } else {
-        final n = int.tryParse(part) ?? 0;
+        final n = int.tryParse(cleaned) ?? 0;
         if (n <= 0) continue;
-        if (isOdd && n.isEven) continue;
-        if (isEven && n.isOdd) continue;
+        if (seg.isOdd && n.isEven) continue;
+        if (seg.isEven && n.isOdd) continue;
         seen.add(n);
       }
     }

@@ -166,6 +166,35 @@ void main() {
       expect(week1.single.visible.id, 'ODD');
       expect(week2.single.visible.id, 'EVEN');
     });
+
+    test('正确解析带“第”字、单双周变体与复合周次，第4周课程在第13周不误判为本周', () {
+      final week4Only = Course.fromApiJson({
+        'course_code': 'LAB4',
+        'course_name': '单周实验课',
+        'weekday': '3',
+        'periods': '5-6节',
+        'weeks': '第4周',
+      }, '2025-2026-2');
+      expect(week4Only.weekNumbers, [4]);
+      expect(week4Only.isActiveInWeek(4), isTrue);
+      expect(week4Only.isActiveInWeek(13), isFalse);
+
+      expect(Course.parseWeekNumbers('第1-3周'), [1, 2, 3]);
+      expect(Course.parseWeekNumbers('第4周 第8周'), [4, 8]);
+      expect(Course.parseWeekNumbers('1-5单周'), [1, 3, 5]);
+      expect(Course.parseWeekNumbers('1-5,7-9周(单)'), [1, 3, 5, 7, 9]);
+      expect(Course.parseWeekNumbers('1-3周、6~8周(双)'), [1, 2, 3, 6, 8]);
+
+      // 无法解析的非空周次文本不回退为 1-18 全周有效
+      final unparseable = Course.fromApiJson({
+        'course_code': 'TBD',
+        'course_name': '待定课程',
+        'weekday': '1',
+        'periods': '1-2节',
+        'weeks': '待定',
+      }, '2025-2026-2');
+      expect(unparseable.isActiveInWeek(13), isFalse);
+    });
   });
 
   group('P2-1 MFA 验证成功后退出弹窗并返回登录前页面', () {
