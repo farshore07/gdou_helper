@@ -40,8 +40,148 @@ const _termMap = {'1': '3', '2': '12'};
   return (year, term);
 }
 
+DateTime? parseIsoDateOnly(String? raw) {
+  if (raw == null) return null;
+  final trimmed = raw.trim();
+  final match = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})').firstMatch(trimmed);
+  if (match == null) return null;
+  final year = int.tryParse(match.group(1)!);
+  final month = int.tryParse(match.group(2)!);
+  final day = int.tryParse(match.group(3)!);
+  if (year == null || month == null || day == null) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  final date = DateTime(year, month, day);
+  if (date.year != year || date.month != month || date.day != day) return null;
+  return date;
+}
+
+(int, int)? _parseHourMinute(String? raw) {
+  if (raw == null) return null;
+  final match = RegExp(r'^(\d{1,2}):(\d{2})').firstMatch(raw.trim());
+  if (match == null) return null;
+  final hour = int.tryParse(match.group(1)!);
+  final minute = int.tryParse(match.group(2)!);
+  if (hour == null || minute == null) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return (hour, minute);
+}
+
+String _formatHourMinute(int hour, int minute) =>
+    '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+
+/// 后端课表接口附带的学期校历与节次时间。
+class TimetableMeta {
+  final DateTime? semesterStartDate;
+  final Map<int, (int, int)> periodStartTimes;
+  final Map<int, String> periodTimeLabels;
+
+  const TimetableMeta({
+    this.semesterStartDate,
+    this.periodStartTimes = const {},
+    this.periodTimeLabels = const {},
+  });
+
+  bool get isEmpty =>
+      semesterStartDate == null &&
+      periodStartTimes.isEmpty &&
+      periodTimeLabels.isEmpty;
+
+  factory TimetableMeta.fromApiJson(Map<String, dynamic> json) {
+    final startDate = parseIsoDateOnly(json['semester_start_date'] as String?);
+    final startTimes = <int, (int, int)>{};
+    final labels = <int, String>{};
+
+    final rawPeriods = json['period_times'];
+    if (rawPeriods is List) {
+      for (final entry in rawPeriods) {
+        if (entry is! Map) continue;
+        final period = (entry['period'] as num?)?.toInt() ??
+            int.tryParse('${entry['period'] ?? ''}');
+        if (period == null || period < 1) continue;
+        final startHm = _parseHourMinute(entry['start_time'] as String?);
+        final endHm = _parseHourMinute(entry['end_time'] as String?);
+        if (startHm != null) {
+          startTimes[period] = startHm;
+          final startStr = _formatHourMinute(startHm.$1, startHm.$2);
+          if (endHm != null) {
+            labels[period] =
+                '$startStr-${_formatHourMinute(endHm.$1, endHm.$2)}';
+          } else {
+            labels[period] = startStr;
+          }
+        }
+      }
+    }
+
+    return TimetableMeta(
+      semesterStartDate: startDate,
+      periodStartTimes: Map.unmodifiable(startTimes),
+      periodTimeLabels: Map.unmodifiable(labels),
+    );
+  }
+
+  Map<String, dynamic> toCacheJson() => {
+    if (semesterStartDate != null)
+      'semester_start_date':
+          '${semesterStartDate!.year.toString().padLeft(4, '0')}-${semesterStartDate!.month.toString().padLeft(2, '0')}-${semesterStartDate!.day.toString().padLeft(2, '0')}',
+    'period_times': [
+      for (final entry in periodStartTimes.entries)
+        () {
+          final label = periodTimeLabels[entry.key] ?? '';
+          final parts = label.split('-');
+          return {
+            'period': entry.key,
+            'start_time': _formatHourMinute(entry.value.$1, entry.value.$2),
+            if (parts.length > 1) 'end_time': parts[1],
+          };
+        }(),
+    ],
+  };
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is TimetableMeta &&
+        other.semesterStartDate == semesterStartDate &&
+        mapEquals(other.periodStartTimes, periodStartTimes) &&
+        mapEquals(other.periodTimeLabels, periodTimeLabels);
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    semesterStartDate,
+    Object.hashAllUnordered(
+      periodStartTimes.entries.map((e) => Object.hash(e.key, e.value)),
+    ),
+    Object.hashAllUnordered(
+      periodTimeLabels.entries.map((e) => Object.hash(e.key, e.value)),
+    ),
+  );
+}
+
+class TimetableMetaNotifier extends Notifier<Map<String, TimetableMeta>> {
+  @override
+  Map<String, TimetableMeta> build() {
+    ref.watch(authProvider.select((a) => a.sessionVersion));
+    return const {};
+  }
+
+  void setMeta(String semester, TimetableMeta meta) {
+    if (meta.isEmpty) return;
+    if (state[semester] == meta) return;
+    state = {...state, semester: meta};
+  }
+}
+
+final timetableMetaProvider =
+    NotifierProvider<TimetableMetaNotifier, Map<String, TimetableMeta>>(
+      TimetableMetaNotifier.new,
+    );
+
 // ── 课表（缓存优先 + 后台刷新） ──
 class TimetableNotifier extends AsyncNotifier<List<Course>> {
+  int _requestSeq = 0;
+
   @override
   Future<List<Course>> build() async {
     final (isLoggedIn, username, cookie, sessionVersion) = ref.watch(
@@ -50,18 +190,43 @@ class TimetableNotifier extends AsyncNotifier<List<Course>> {
       ),
     );
     final semester = ref.watch(semesterProvider);
+    final seq = ++_requestSeq;
     if (!isLoggedIn || cookie == null) return [];
     final cacheKey = 'timetable_${username}_$semester';
+    final metaCacheKey = 'timetable_meta_${username}_$semester';
 
-    // 1. 先返回缓存，后台刷新成功后更新页面状态
+    bool isCurrentRequest() =>
+        ref.mounted &&
+        seq == _requestSeq &&
+        ref.read(semesterProvider) == semester &&
+        ref.read(authProvider).sessionVersion == sessionVersion;
+
+    // 1. 先尝试恢复后端校历缓存（若存在）
+    final cachedMetaRaw = await CacheService.get(metaCacheKey);
+    if (cachedMetaRaw != null && isCurrentRequest()) {
+      try {
+        final meta = TimetableMeta.fromApiJson(
+          Map<String, dynamic>.from(jsonDecode(cachedMetaRaw) as Map),
+        );
+        ref.read(timetableMetaProvider.notifier).setMeta(semester, meta);
+      } catch (_) {}
+    }
+
+    // 2. 先返回缓存，后台刷新成功后核对请求批次与学期再更新页面状态
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final courses = list.map((c) => Course.fromApiJson(c, semester)).toList();
-      _fetchAndCache(cacheKey, cookie, semester)
+      _fetchAndCache(
+            cacheKey,
+            metaCacheKey,
+            cookie,
+            semester,
+            sessionVersion: sessionVersion,
+            shouldApplyMeta: isCurrentRequest,
+          )
           .then((fresh) {
-            if (ref.mounted &&
-                ref.read(authProvider).sessionVersion == sessionVersion) {
+            if (isCurrentRequest()) {
               state = AsyncData(fresh);
             }
           })
@@ -69,32 +234,48 @@ class TimetableNotifier extends AsyncNotifier<List<Course>> {
       return courses;
     }
 
-    // 2. 无缓存，请求 API
+    // 3. 无缓存，请求 API
     return _fetchAndCache(
       cacheKey,
+      metaCacheKey,
       cookie,
       semester,
+      sessionVersion: sessionVersion,
+      shouldApplyMeta: isCurrentRequest,
     ).catchError((_) => <Course>[]);
   }
 
   Future<List<Course>> _fetchAndCache(
     String key,
+    String metaKey,
     String cookie,
-    String semester,
-  ) async {
+    String semester, {
+    required int sessionVersion,
+    required bool Function() shouldApplyMeta,
+  }) async {
     final (year, term) = _splitSemester(semester);
     final r = await _withAutoReLogin(
       ref,
       (currentCookie) => fetchTimetable(currentCookie, year, term),
     );
     if (!r.isOk || r.data == null) throw ApiException('课表数据为空');
-    final courses = (r.data!['courses'] as List<dynamic>?) ?? [];
+    final data = r.data!;
+    final courses = (data['courses'] as List<dynamic>?) ?? [];
     final list = courses.map((c) {
       final m = c as Map<String, dynamic>;
       return Course.fromApiJson(m, semester);
     }).toList();
-    // 写缓存
-    CacheService.set(key, jsonEncode(r.data!['courses']));
+    // 写缓存（按学号+学期隔离）
+    CacheService.set(key, jsonEncode(courses));
+    final meta = TimetableMeta.fromApiJson(data);
+    if (!meta.isEmpty) {
+      CacheService.set(metaKey, jsonEncode(meta.toCacheJson()));
+      if (shouldApplyMeta() ||
+          (ref.mounted &&
+              ref.read(authProvider).sessionVersion == sessionVersion)) {
+        ref.read(timetableMetaProvider.notifier).setMeta(semester, meta);
+      }
+    }
     return list;
   }
 
@@ -111,6 +292,8 @@ final timetableProvider =
 
 // ── 考试（缓存优先 + 后台刷新） ──
 class ExamsNotifier extends AsyncNotifier<List<Exam>> {
+  int _requestSeq = 0;
+
   @override
   Future<List<Exam>> build() async {
     final (isLoggedIn, username, cookie, sessionVersion) = ref.watch(
@@ -119,16 +302,23 @@ class ExamsNotifier extends AsyncNotifier<List<Exam>> {
       ),
     );
     final semester = ref.watch(semesterProvider);
+    final seq = ++_requestSeq;
     if (!isLoggedIn || cookie == null) return [];
     final cacheKey = 'exams_${username}_$semester';
+
+    bool isCurrentRequest() =>
+        ref.mounted &&
+        seq == _requestSeq &&
+        ref.read(semesterProvider) == semester &&
+        ref.read(authProvider).sessionVersion == sessionVersion;
+
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final exams = list.map((e) => Exam.fromApiJson(e)).toList();
       _fetchExams(cacheKey, cookie, semester)
           .then((fresh) {
-            if (ref.mounted &&
-                ref.read(authProvider).sessionVersion == sessionVersion) {
+            if (isCurrentRequest()) {
               state = AsyncData(fresh);
             }
           })
@@ -164,16 +354,24 @@ class ExamsNotifier extends AsyncNotifier<List<Exam>> {
     final auth = ref.read(authProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return;
     final semester = ref.read(semesterProvider);
+    final seq = ++_requestSeq;
     final exams = await _fetchExams(
       'exams_${auth.username}_$semester',
       auth.cookie!,
       semester,
     );
-    state = AsyncData(exams);
+    if (ref.mounted &&
+        seq == _requestSeq &&
+        ref.read(semesterProvider) == semester &&
+        ref.read(authProvider).sessionVersion == auth.sessionVersion) {
+      state = AsyncData(exams);
+    }
   }
 }
 
 class GradesNotifier extends AsyncNotifier<List<Score>> {
+  int _requestSeq = 0;
+
   @override
   Future<List<Score>> build() async {
     final (isLoggedIn, username, cookie, sessionVersion) = ref.watch(
@@ -182,16 +380,23 @@ class GradesNotifier extends AsyncNotifier<List<Score>> {
       ),
     );
     final semester = ref.watch(semesterProvider);
+    final seq = ++_requestSeq;
     if (!isLoggedIn || cookie == null) return [];
     final cacheKey = 'grades_${username}_$semester';
+
+    bool isCurrentRequest() =>
+        ref.mounted &&
+        seq == _requestSeq &&
+        ref.read(semesterProvider) == semester &&
+        ref.read(authProvider).sessionVersion == sessionVersion;
+
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final scores = list.map((s) => Score.fromApiJson(s, semester)).toList();
       _fetchGrades(cacheKey, cookie, semester)
           .then((fresh) {
-            if (ref.mounted &&
-                ref.read(authProvider).sessionVersion == sessionVersion) {
+            if (isCurrentRequest()) {
               state = AsyncData(fresh);
             }
           })
@@ -227,12 +432,18 @@ class GradesNotifier extends AsyncNotifier<List<Score>> {
     final auth = ref.read(authProvider);
     if (!auth.isLoggedIn || auth.cookie == null) return;
     final semester = ref.read(semesterProvider);
+    final seq = ++_requestSeq;
     final scores = await _fetchGrades(
       'grades_${auth.username}_$semester',
       auth.cookie!,
       semester,
     );
-    state = AsyncData(scores);
+    if (ref.mounted &&
+        seq == _requestSeq &&
+        ref.read(semesterProvider) == semester &&
+        ref.read(authProvider).sessionVersion == auth.sessionVersion) {
+      state = AsyncData(scores);
+    }
   }
 }
 

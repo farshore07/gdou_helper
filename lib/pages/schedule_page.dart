@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/course.dart';
 import '../providers/data_providers.dart';
+import '../providers/reminder_provider.dart';
 import '../providers/semester_provider.dart';
 import '../widgets/semester_selector.dart';
 
@@ -11,62 +13,82 @@ const _dayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', 
 const _rowH = 60.0;
 const _timeW = 52.0;
 
-// GDOU 节次时间
+// GDOU 节次时间（后端未返回 period_times 时的回退值）
 const _periodTimes = [
   '8:10-8:55',
   '9:00-9:45',
   '10:15-11:00',
   '11:05-11:50',
-  '2:30-3:15',
-  '3:20-4:05',
-  '4:30-5:15',
-  '5:20-6:05',
-  '7:30-8:15',
-  '8:25-9:10',
+  '14:30-15:15',
+  '15:20-16:05',
+  '16:30-17:15',
+  '17:20-18:05',
+  '19:30-20:15',
+  '20:25-21:10',
 ];
 
 class SchedulePage extends ConsumerStatefulWidget {
-  const SchedulePage({super.key});
+  final DateTime Function()? nowProvider;
+  const SchedulePage({super.key, this.nowProvider});
   @override
   ConsumerState<SchedulePage> createState() => _SchedulePageState();
 }
 
-// 学期→开学日期
-DateTime _semesterStart(String semester) {
-  final parts = semester.split('-');
-  final term = parts.length > 2 ? int.tryParse(parts[2]) ?? 1 : 1;
-  final y1 = int.tryParse(parts[0]) ?? 2025;
-  final y2 = int.tryParse(parts.length > 1 ? parts[1] : parts[0]) ?? y1;
-  return DateTime(term == 1 ? y1 : y2, term == 1 ? 9 : 3, 1);
-}
+// 学期→开学日期（优先采用后端校历）
+DateTime _semesterStart(String semester, {DateTime? overrideStartDate}) =>
+    resolveSemesterStartDate(semester, overrideStartDate: overrideStartDate);
 
-int _currentWeekForSemester(String semester) {
-  final start = _semesterStart(semester);
-  final now = DateTime.now();
-  if (now.isBefore(start)) return 1;
-  final w = ((now.difference(start).inDays) / 7).floor() + 1;
+int _currentWeekForSemester(
+  String semester, {
+  DateTime? overrideStartDate,
+  DateTime? now,
+}) {
+  final start = _semesterStart(semester, overrideStartDate: overrideStartDate);
+  final current = now ?? DateTime.now();
+  final today = DateTime(current.year, current.month, current.day);
+  if (today.isBefore(start)) return 1;
+  final diffDays = DateTime.utc(today.year, today.month, today.day)
+      .difference(DateTime.utc(start.year, start.month, start.day))
+      .inDays;
+  final w = (diffDays ~/ 7) + 1;
   return w.clamp(1, 20);
 }
 
 class _SchedulePageState extends ConsumerState<SchedulePage> {
   PageController? _pageCtrl;
   int _week = 1;
+  bool _userChangedWeek = false;
+  String? _syncedSemester;
+  DateTime? _syncedStartDate;
   static const _maxWeek = 20;
 
   PageController get _pc => _pageCtrl!;
+  DateTime _now() => widget.nowProvider?.call() ?? DateTime.now();
+
+  PageController _createPageController(int initialWeek) {
+    final ctrl = PageController(initialPage: initialWeek - 1);
+    ctrl.addListener(() {
+      if (!ctrl.hasClients || ctrl.page == null) return;
+      final w = ctrl.page!.round() + 1;
+      if (w != _week && w >= 1 && w <= _maxWeek) setState(() => _week = w);
+    });
+    return ctrl;
+  }
 
   @override
   void initState() {
     super.initState();
     final semester = ref.read(semesterProvider);
-    final cur = _currentWeekForSemester(semester).clamp(1, _maxWeek);
+    final meta = ref.read(timetableMetaProvider)[semester];
+    final cur = _currentWeekForSemester(
+      semester,
+      overrideStartDate: meta?.semesterStartDate,
+      now: _now(),
+    ).clamp(1, _maxWeek);
     _week = cur;
-    _pageCtrl = PageController(initialPage: cur - 1);
-    _pc.addListener(() {
-      if (!_pc.hasClients || _pc.page == null) return;
-      final w = _pc.page!.round() + 1;
-      if (w != _week && w >= 1 && w <= _maxWeek) setState(() => _week = w);
-    });
+    _syncedSemester = semester;
+    _syncedStartDate = meta?.semesterStartDate;
+    _pageCtrl = _createPageController(cur);
   }
 
   @override
@@ -75,9 +97,29 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
     super.dispose();
   }
 
-  void _goWeek(int w) {
-    if (w < 1 || w > _maxWeek || _pageCtrl == null || !_pc.hasClients) return;
-    _pc.jumpToPage(w - 1);
+  void _syncWeekTo(int targetWeek) {
+    final clamped = targetWeek.clamp(1, _maxWeek);
+    if (_pageCtrl != null && _pc.hasClients) {
+      if (_week != clamped) {
+        setState(() => _week = clamped);
+      }
+      if ((_pc.page?.round() ?? -1) != clamped - 1) {
+        _pc.jumpToPage(clamped - 1);
+      }
+    } else if (_week != clamped) {
+      final old = _pageCtrl;
+      _pageCtrl = _createPageController(clamped);
+      old?.dispose();
+      setState(() => _week = clamped);
+    }
+  }
+
+  void _goWeek(int w, {bool userInitiated = false}) {
+    if (w < 1 || w > _maxWeek) return;
+    if (userInitiated) {
+      _userChangedWeek = true;
+    }
+    _syncWeekTo(w);
   }
 
   void _showDetail(Course c) {
@@ -188,18 +230,56 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
     final courses = asyncCourses.asData?.value ?? [];
 
     final semester = ref.watch(semesterProvider);
-    final weekStart = _semesterStart(
+    final meta = ref.watch(timetableMetaProvider)[semester];
+    final startDate = meta?.semesterStartDate;
+    final now = _now();
+
+    // 切换学期或异步校历到达时自动同步当前周（用户已手动翻周则不强行跳转）
+    final semesterChanged = semester != _syncedSemester;
+    final startDateChanged = startDate != _syncedStartDate;
+    if (semesterChanged || startDateChanged) {
+      _syncedSemester = semester;
+      _syncedStartDate = startDate;
+      if (semesterChanged) {
+        _userChangedWeek = false;
+      }
+      if (!_userChangedWeek) {
+        final targetWeek = _currentWeekForSemester(
+          semester,
+          overrideStartDate: startDate,
+          now: now,
+        );
+        if (targetWeek != _week) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || _userChangedWeek) return;
+            _syncWeekTo(targetWeek);
+          });
+        }
+      }
+    }
+
+    final semesterStart = _semesterStart(
       semester,
-    ).add(Duration(days: (_week - 1) * 7));
+      overrideStartDate: startDate,
+    );
+    final weekStart = DateTime(
+      semesterStart.year,
+      semesterStart.month,
+      semesterStart.day + (_week - 1) * 7,
+    );
 
     // 计算今天对应星期几（仅当查看本周时有效）
     final todayIdx = () {
-      if (_week != _currentWeekForSemester(semester)) {
+      if (_week !=
+          _currentWeekForSemester(
+            semester,
+            overrideStartDate: startDate,
+            now: now,
+          )) {
         return -1;
       }
-      final now = DateTime.now();
       for (var i = 0; i < 7; i++) {
-        final d = weekStart.add(Duration(days: i));
+        final d = DateTime(weekStart.year, weekStart.month, weekStart.day + i);
         if (d.year == now.year && d.month == now.month && d.day == now.day) {
           return i;
         }
@@ -219,18 +299,29 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
           const SemesterSelector(),
           IconButton(
             icon: const Icon(Icons.chevron_left, size: 20),
-            onPressed: _week > 1 ? () => _goWeek(_week - 1) : null,
+            onPressed: _week > 1
+                ? () => _goWeek(_week - 1, userInitiated: true)
+                : null,
           ),
           Text('第$_week周', style: const TextStyle(fontSize: 14)),
           IconButton(
             icon: const Icon(Icons.chevron_right, size: 20),
-            onPressed: _week < _maxWeek ? () => _goWeek(_week + 1) : null,
+            onPressed: _week < _maxWeek
+                ? () => _goWeek(_week + 1, userInitiated: true)
+                : null,
           ),
           IconButton(
             icon: const Icon(Icons.today, size: 20),
             tooltip: '回到本周',
             onPressed: () {
-              final cur = _currentWeekForSemester(ref.read(semesterProvider));
+              final curSemester = ref.read(semesterProvider);
+              final curMeta = ref.read(timetableMetaProvider)[curSemester];
+              final cur = _currentWeekForSemester(
+                curSemester,
+                overrideStartDate: curMeta?.semesterStartDate,
+                now: _now(),
+              );
+              _userChangedWeek = false;
               if (_week != cur) {
                 _goWeek(cur);
               }
@@ -280,7 +371,11 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
                   children: [
                     const SizedBox(width: _timeW),
                     ...List.generate(7, (i) {
-                      final day = weekStart.add(Duration(days: i));
+                      final day = DateTime(
+                        weekStart.year,
+                        weekStart.month,
+                        weekStart.day + i,
+                      );
                       final isToday = i == todayIdx;
                       return Expanded(
                         child: Container(
@@ -324,15 +419,24 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
                 ),
                 // ── 课表网格（PageView 滑动切换周） ──
                 Expanded(
-                  child: PageView.builder(
-                    controller: _pageCtrl,
-                    itemCount: _maxWeek,
-                    itemBuilder: (_, pageIndex) => _buildGrid(
-                      courses,
-                      pageIndex + 1,
-                      gridColor,
-                      cs,
-                      todayIdx,
+                  child: NotificationListener<UserScrollNotification>(
+                    onNotification: (notification) {
+                      if (notification.direction != ScrollDirection.idle) {
+                        _userChangedWeek = true;
+                      }
+                      return false;
+                    },
+                    child: PageView.builder(
+                      controller: _pageCtrl,
+                      itemCount: _maxWeek,
+                      itemBuilder: (_, pageIndex) => _buildGrid(
+                        courses,
+                        pageIndex + 1,
+                        gridColor,
+                        cs,
+                        todayIdx,
+                        meta?.periodTimeLabels ?? const {},
+                      ),
                     ),
                   ),
                 ),
@@ -347,6 +451,7 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
     Color gridColor,
     ColorScheme cs,
     int todayIdx,
+    Map<int, String> periodTimeLabels,
   ) {
     return SingleChildScrollView(
       child: SizedBox(
@@ -381,7 +486,7 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
                           ),
                         ),
                         Text(
-                          _periodTimes[i],
+                          periodTimeLabels[i + 1] ?? _periodTimes[i],
                           style: TextStyle(fontSize: 8, color: cs.outline),
                         ),
                       ],

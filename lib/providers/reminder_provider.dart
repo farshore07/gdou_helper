@@ -11,7 +11,10 @@ import '../services/notification_service.dart';
 const _prefCourseEnabledKey = 'reminder_course_enabled';
 const _prefExamEnabledKey = 'reminder_exam_enabled';
 
-/// GDOU 每节课实际开始时间（小时, 分钟），与课表页面保持一致。
+/// 单次排程的上课提醒数量上限（预留空间给考试提醒，低于 Android 单应用 500 闹钟限制）。
+const int defaultMaxCourseReminders = 300;
+
+/// GDOU 每节课实际开始时间（小时, 分钟），作为后端未返回节次时间时的回退值。
 const List<(int, int)> gdouPeriodStartTimes = [
   (8, 10), // 第 1 节
   (9, 0), // 第 2 节
@@ -39,7 +42,7 @@ class ScheduledReminder {
   });
 }
 
-DateTime _semesterStartDate(String semester) {
+DateTime _fallbackSemesterStartDate(String semester) {
   final parts = semester.split('-');
   final term = parts.length > 2 ? int.tryParse(parts[2]) ?? 1 : 1;
   final y1 = int.tryParse(parts[0]) ?? DateTime.now().year;
@@ -47,41 +50,106 @@ DateTime _semesterStartDate(String semester) {
   return DateTime(term == 1 ? y1 : y2, term == 1 ? 9 : 3, 1);
 }
 
-int _weekNumberForDate(DateTime date, String semester) {
-  final start = _semesterStartDate(semester);
-  final dayOnly = DateTime(date.year, date.month, date.day);
-  if (dayOnly.isBefore(start)) return 0;
-  return (dayOnly.difference(start).inDays ~/ 7) + 1;
+/// 优先采用后端校历的学期起始日，缺失时回退到固定 9 月 1 日 / 3 月 1 日。
+DateTime resolveSemesterStartDate(
+  String semester, {
+  DateTime? overrideStartDate,
+}) {
+  if (overrideStartDate != null) {
+    return DateTime(
+      overrideStartDate.year,
+      overrideStartDate.month,
+      overrideStartDate.day,
+    );
+  }
+  return _fallbackSemesterStartDate(semester);
 }
 
-/// 生成未来 [horizonDays] 天内的精确上课提醒（按真实节次时间与单双周/跳周过滤，避免通知 ID 冲突）。
+/// 优先采用后端返回的节次开始时间，缺失时回退到内置节次表。
+(int, int)? resolvePeriodStartTime(
+  int period, {
+  Map<int, (int, int)>? overridePeriodStartTimes,
+}) {
+  final overridden = overridePeriodStartTimes?[period];
+  if (overridden != null) return overridden;
+  if (period < 1 || period > gdouPeriodStartTimes.length) return null;
+  return gdouPeriodStartTimes[period - 1];
+}
+
+int _weekNumberForDate(DateTime date, DateTime semesterStart) {
+  final dayOnly = DateTime(date.year, date.month, date.day);
+  if (dayOnly.isBefore(semesterStart)) return 0;
+  final diffDays = DateTime.utc(dayOnly.year, dayOnly.month, dayOnly.day)
+      .difference(
+        DateTime.utc(semesterStart.year, semesterStart.month, semesterStart.day),
+      )
+      .inDays;
+  return (diffDays ~/ 7) + 1;
+}
+
+/// 生成精确上课提醒：
+/// - 优先采用后端校历 [semesterStartDate] 与节次时间 [periodStartTimes]，缺失时回退内置默认值；
+/// - 未显式指定 [horizonDays] 时覆盖当前学期剩余全部有效教学周（按时间升序最多保留 [maxReminders] 条）。
 List<ScheduledReminder> buildCourseReminders(
   List<Course> courses, {
   required String semester,
   DateTime? now,
-  int horizonDays = 14,
+  DateTime? semesterStartDate,
+  Map<int, (int, int)>? periodStartTimes,
+  int? horizonDays,
+  int maxReminders = defaultMaxCourseReminders,
   int leadMinutes = 15,
 }) {
+  if (courses.isEmpty || maxReminders <= 0) return const [];
   final current = now ?? DateTime.now();
   final today = DateTime(current.year, current.month, current.day);
+  final start = resolveSemesterStartDate(
+    semester,
+    overrideStartDate: semesterStartDate,
+  );
+
+  late final DateTime scanStart;
+  late final DateTime scanEnd;
+  if (horizonDays != null) {
+    if (horizonDays <= 0) return const [];
+    scanStart = today;
+    scanEnd = DateTime(today.year, today.month, today.day + horizonDays - 1);
+  } else {
+    var maxWeek = 0;
+    for (final course in courses) {
+      final candidate = course.weekNumbers.isNotEmpty
+          ? course.weekNumbers.reduce((a, b) => a > b ? a : b)
+          : course.endWeek;
+      if (candidate > maxWeek) maxWeek = candidate;
+    }
+    if (maxWeek <= 0) return const [];
+    if (maxWeek > 25) maxWeek = 25;
+    scanStart = today.isAfter(start) ? today : start;
+    scanEnd = DateTime(start.year, start.month, start.day + maxWeek * 7 - 1);
+    if (scanStart.isAfter(scanEnd)) return const [];
+  }
+
   final reminders = <ScheduledReminder>[];
   final usedIds = <int>{};
 
-  for (var offset = 0; offset < horizonDays; offset++) {
-    final day = today.add(Duration(days: offset));
-    final week = _weekNumberForDate(day, semester);
+  for (
+    var day = scanStart;
+    !day.isAfter(scanEnd);
+    day = DateTime(day.year, day.month, day.day + 1)
+  ) {
+    final week = _weekNumberForDate(day, start);
     if (week < 1 || week > 25) continue;
 
     for (final course in courses) {
       if (course.dayOfWeek != day.weekday) continue;
       if (!course.isActiveInWeek(week)) continue;
-      if (course.startPeriod < 1 ||
-          course.startPeriod > gdouPeriodStartTimes.length) {
-        continue;
-      }
+      final periodStart = resolvePeriodStartTime(
+        course.startPeriod,
+        overridePeriodStartTimes: periodStartTimes,
+      );
+      if (periodStart == null) continue;
 
-      final (startHour, startMinute) =
-          gdouPeriodStartTimes[course.startPeriod - 1];
+      final (startHour, startMinute) = periodStart;
       final classStart = DateTime(
         day.year,
         day.month,
@@ -111,6 +179,14 @@ List<ScheduledReminder> buildCourseReminders(
         ),
       );
     }
+  }
+
+  reminders.sort((a, b) {
+    final cmp = a.when.compareTo(b.when);
+    return cmp != 0 ? cmp : a.id.compareTo(b.id);
+  });
+  if (reminders.length > maxReminders) {
+    return reminders.sublist(0, maxReminders);
   }
   return reminders;
 }
@@ -180,6 +256,9 @@ class ReminderNotifier extends Notifier<ReminderState> {
     ref.listen(semesterProvider, (_, _) {
       _reschedule();
     });
+    ref.listen(timetableMetaProvider, (_, _) {
+      _reschedule();
+    });
 
     // 在 build() 返回初始状态后再异步加载持久化开关并执行首次排程，避免访问未初始化 state
     Future.microtask(_loadPrefsAndSchedule);
@@ -237,6 +316,7 @@ class ReminderNotifier extends Notifier<ReminderState> {
     final courses = ref.read(timetableProvider).asData?.value ?? const [];
     final exams = ref.read(examsProvider).asData?.value ?? const [];
     final semester = ref.read(semesterProvider);
+    final meta = ref.read(timetableMetaProvider)[semester];
 
     try {
       await cancelAllNotifications();
@@ -244,7 +324,12 @@ class ReminderNotifier extends Notifier<ReminderState> {
 
       final pending = <ScheduledReminder>[
         if (currentState.courseEnabled)
-          ...buildCourseReminders(courses, semester: semester),
+          ...buildCourseReminders(
+            courses,
+            semester: semester,
+            semesterStartDate: meta?.semesterStartDate,
+            periodStartTimes: meta?.periodStartTimes,
+          ),
         if (currentState.examEnabled) ...buildExamReminders(exams),
       ];
 

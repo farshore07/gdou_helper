@@ -324,11 +324,18 @@ Future<Map<String, dynamic>> fetchCachedGradeDetail(
   final future = () async {
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
-      return Map<String, dynamic>.from(jsonDecode(cached) as Map);
+      final decoded = Map<String, dynamic>.from(jsonDecode(cached) as Map);
+      final cachedItems = decoded['items'];
+      if (cachedItems is List && cachedItems.isNotEmpty) {
+        return decoded;
+      }
     }
     final data = (await fetchGradeDetail(cookie, query: query)).data;
     if (data == null) throw const ApiException('详细成绩数据为空');
-    await CacheService.set(cacheKey, jsonEncode(data));
+    final items = data['items'];
+    if (items is List && items.isNotEmpty) {
+      await CacheService.set(cacheKey, jsonEncode(data));
+    }
     return data;
   }();
   _pendingGradeDetails[cacheKey] = future;
