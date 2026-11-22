@@ -4,12 +4,10 @@ import 'package:go_router/go_router.dart';
 import 'pages/login_page.dart';
 import 'pages/shell.dart';
 import 'pages/schedule_page.dart';
-import 'pages/dormitory_page.dart';
 import 'pages/exam_score_page.dart';
 import 'pages/about_page.dart';
 import 'pages/more_page.dart';
 import 'pages/settings_page.dart';
-import 'pages/admin_page.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
@@ -24,14 +22,6 @@ final routerProvider = Provider<GoRouter>((ref) {
               GoRoute(
                 path: '/schedule',
                 builder: (_, _) => const SchedulePage(),
-              ),
-            ],
-          ),
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: '/dormitory',
-                builder: (_, _) => const DormitoryPage(),
               ),
             ],
           ),
@@ -53,7 +43,6 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/login', builder: (_, _) => const LoginPage()),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
       GoRoute(path: '/about', builder: (_, _) => const AboutPage()),
-      GoRoute(path: '/admin', builder: (_, _) => const AdminPage()),
     ],
   );
 });

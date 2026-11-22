@@ -44,29 +44,35 @@ const _termMap = {'1': '3', '2': '12'};
 class TimetableNotifier extends AsyncNotifier<List<Course>> {
   @override
   Future<List<Course>> build() async {
-    final auth = ref.watch(authProvider);
+    final (isLoggedIn, username, cookie, sessionVersion) = ref.watch(
+      authProvider.select(
+        (a) => (a.isLoggedIn, a.username, a.cookie, a.sessionVersion),
+      ),
+    );
     final semester = ref.watch(semesterProvider);
-    if (!auth.isLoggedIn || auth.cookie == null) return [];
-    final cacheKey = 'timetable_${auth.username}_$semester';
+    if (!isLoggedIn || cookie == null) return [];
+    final cacheKey = 'timetable_${username}_$semester';
 
-    // 1. 先返回缓存
+    // 1. 先返回缓存，后台刷新成功后更新页面状态
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final courses = list.map((c) => Course.fromApiJson(c, semester)).toList();
-      // 后台刷新
-      _fetchAndCache(
-        cacheKey,
-        auth.cookie!,
-        semester,
-      ).catchError((_) => <Course>[]);
+      _fetchAndCache(cacheKey, cookie, semester)
+          .then((fresh) {
+            if (ref.mounted &&
+                ref.read(authProvider).sessionVersion == sessionVersion) {
+              state = AsyncData(fresh);
+            }
+          })
+          .catchError((_) {});
       return courses;
     }
 
     // 2. 无缓存，请求 API
     return _fetchAndCache(
       cacheKey,
-      auth.cookie!,
+      cookie,
       semester,
     ).catchError((_) => <Course>[]);
   }
@@ -107,20 +113,31 @@ final timetableProvider =
 class ExamsNotifier extends AsyncNotifier<List<Exam>> {
   @override
   Future<List<Exam>> build() async {
-    final auth = ref.watch(authProvider);
+    final (isLoggedIn, username, cookie, sessionVersion) = ref.watch(
+      authProvider.select(
+        (a) => (a.isLoggedIn, a.username, a.cookie, a.sessionVersion),
+      ),
+    );
     final semester = ref.watch(semesterProvider);
-    if (!auth.isLoggedIn || auth.cookie == null) return [];
-    final cacheKey = 'exams_${auth.username}_$semester';
+    if (!isLoggedIn || cookie == null) return [];
+    final cacheKey = 'exams_${username}_$semester';
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final exams = list.map((e) => Exam.fromApiJson(e)).toList();
-      _fetchExams(cacheKey, auth.cookie!, semester).catchError((_) => <Exam>[]);
+      _fetchExams(cacheKey, cookie, semester)
+          .then((fresh) {
+            if (ref.mounted &&
+                ref.read(authProvider).sessionVersion == sessionVersion) {
+              state = AsyncData(fresh);
+            }
+          })
+          .catchError((_) {});
       return exams;
     }
     return _fetchExams(
       cacheKey,
-      auth.cookie!,
+      cookie,
       semester,
     ).catchError((_) => <Exam>[]);
   }
@@ -159,24 +176,31 @@ class ExamsNotifier extends AsyncNotifier<List<Exam>> {
 class GradesNotifier extends AsyncNotifier<List<Score>> {
   @override
   Future<List<Score>> build() async {
-    final auth = ref.watch(authProvider);
+    final (isLoggedIn, username, cookie, sessionVersion) = ref.watch(
+      authProvider.select(
+        (a) => (a.isLoggedIn, a.username, a.cookie, a.sessionVersion),
+      ),
+    );
     final semester = ref.watch(semesterProvider);
-    if (!auth.isLoggedIn || auth.cookie == null) return [];
-    final cacheKey = 'grades_${auth.username}_$semester';
+    if (!isLoggedIn || cookie == null) return [];
+    final cacheKey = 'grades_${username}_$semester';
     final cached = await CacheService.get(cacheKey);
     if (cached != null) {
       final list = (jsonDecode(cached) as List).cast<Map<String, dynamic>>();
       final scores = list.map((s) => Score.fromApiJson(s, semester)).toList();
-      _fetchGrades(
-        cacheKey,
-        auth.cookie!,
-        semester,
-      ).catchError((_) => <Score>[]);
+      _fetchGrades(cacheKey, cookie, semester)
+          .then((fresh) {
+            if (ref.mounted &&
+                ref.read(authProvider).sessionVersion == sessionVersion) {
+              state = AsyncData(fresh);
+            }
+          })
+          .catchError((_) {});
       return scores;
     }
     return _fetchGrades(
       cacheKey,
-      auth.cookie!,
+      cookie,
       semester,
     ).catchError((_) => <Score>[]);
   }

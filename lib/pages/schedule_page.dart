@@ -81,7 +81,7 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
   }
 
   void _showDetail(Course c) {
-    final active = c.startWeek <= _week && _week <= c.endWeek;
+    final active = c.isActiveInWeek(_week);
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -136,7 +136,7 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
               '时间',
               '${_dayLabels[c.dayOfWeek - 1]} 第${c.startPeriod}-${c.startPeriod + c.duration - 1}节',
             ),
-            _detail(Icons.date_range, '周次', '第${c.startWeek}-${c.endWeek}周'),
+            _detail(Icons.date_range, '周次', c.weeksDisplay),
             _detail(Icons.school_outlined, '学期', semesterLabel(c.semester)),
             if (c.note != null && c.note!.isNotEmpty)
               _detail(Icons.notes, '备注', c.note!),
@@ -450,7 +450,7 @@ class _SchedulePageState extends ConsumerState<SchedulePage> {
           onTap: () => group.courses.length == 1
               ? _showDetail(c)
               : _showCoursePicker(group.courses),
-          child: c.startWeek <= week && week <= c.endWeek
+          child: c.isActiveInWeek(week)
               ? _activeCourse(c)
               : _inactiveCourse(c),
         ),
@@ -556,7 +556,7 @@ List<CourseDisplayGroup> groupCoursesForDay(List<Course> courses, int week) {
 
   return groups.map((group) {
     final visible = group.firstWhere(
-      (course) => course.startWeek <= week && week <= course.endWeek,
+      (course) => course.isActiveInWeek(week),
       orElse: () => group.first,
     );
     return CourseDisplayGroup(visible, group);

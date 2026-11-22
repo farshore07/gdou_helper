@@ -13,9 +13,14 @@ final dio = Dio(
   ),
 );
 
-// ── 请求冷却（同 URL+data 5s 内拦截重复请求） ──
+// ── 请求冷却（同 URL+data 5s 内拦截重复请求；交互式认证接口不冷却） ──
 final _lastRequest = <String, DateTime>{};
 const _coolDown = Duration(seconds: 5);
+const _cooldownBypassPaths = {
+  '/api/v1/jwxt/login',
+  '/api/v1/jwxt/mfa/send',
+  '/api/v1/jwxt/mfa/verify',
+};
 
 bool _checkCooldown(String key) {
   final last = _lastRequest[key];
@@ -30,6 +35,9 @@ void _setupCooldownInterceptor() {
   dio.interceptors.add(
     InterceptorsWrapper(
       onRequest: (options, handler) {
+        if (_cooldownBypassPaths.contains(options.path)) {
+          return handler.next(options);
+        }
         final key = '${options.method}:${options.path}:${options.data}';
         if (!_checkCooldown(key)) {
           return handler.reject(
@@ -117,10 +125,12 @@ String? _apiCodeMessage(String code) => switch (code) {
   'UNAUTHORIZED' => '认证失败，请重新登录',
   'BAD_REQUEST' => '请求参数错误',
   'NOT_FOUND' => '请求的资源不存在',
+  'METHOD_NOT_ALLOWED' => '请求方法不支持',
   'FORBIDDEN' => '没有权限访问',
   'RATE_LIMITED' => '请求太频繁，已触发限流',
   'BANNED' => 'IP 已被封禁',
   'SESSION_EXPIRED' => '会话已过期，请重新登录',
+  'SERVER_BUSY' => '当前登录人数较多，请稍后重试',
   _ => null,
 };
 
@@ -134,11 +144,14 @@ Future<void> setApiServer(String host) async {
 
 bool _dioReady = false;
 
+const _envApiServer = String.fromEnvironment('API_SERVER');
+
 Future<String> loadApiServer() async {
   final sp = await SharedPreferences.getInstance();
-  _server = _normalizeHost(
-    sp.getString('api_server') ?? const String.fromEnvironment('API_SERVER'),
-  );
+  final configured = _envApiServer.trim().isNotEmpty
+      ? _envApiServer.trim()
+      : (sp.getString('api_server') ?? const String.fromEnvironment('API_SERVER'));
+  _server = _normalizeHost(configured);
   dio.options.baseUrl = _server;
   if (!_dioReady) {
     _initDio();
@@ -167,24 +180,88 @@ class ApiResponse<T> {
   final String code;
   final String message;
   final T? data;
-  const ApiResponse({required this.code, required this.message, this.data});
+  final int? statusCode;
+  const ApiResponse({
+    required this.code,
+    required this.message,
+    this.data,
+    this.statusCode,
+  });
   bool get isOk => code == 'OK';
+}
+
+ApiResponse<Map<String, dynamic>> _parseMapResponse(Response r) {
+  final raw = r.data;
+  if (raw is! Map) {
+    final status = r.statusCode ?? 0;
+    return ApiResponse(
+      code: 'HTTP_$status',
+      message: _statusMessage(status),
+      statusCode: r.statusCode,
+    );
+  }
+  final map = Map<String, dynamic>.from(raw);
+  final d = map['data'];
+  return ApiResponse(
+    code: map['code'] as String? ?? 'UNKNOWN_ERROR',
+    message: map['message'] as String? ?? _statusMessage(r.statusCode ?? 0),
+    data: d is Map<String, dynamic>
+        ? d
+        : (d is Map ? Map<String, dynamic>.from(d) : null),
+    statusCode: r.statusCode,
+  );
 }
 
 // ── 教务 Auth ──
 Future<ApiResponse<Map<String, dynamic>>> loginJwxt(
   String username,
-  String password,
-) async {
+  String password, {
+  String? deviceFingerprint,
+  String? captchaToken,
+  String? captchaCode,
+  String? networkMode,
+}) async {
+  final body = <String, dynamic>{
+    'username': username,
+    'password': password,
+    if (deviceFingerprint != null && deviceFingerprint.isNotEmpty)
+      'device_fingerprint': deviceFingerprint,
+    if (captchaToken != null && captchaToken.isNotEmpty)
+      'captcha_token': captchaToken,
+    if (captchaCode != null && captchaCode.isNotEmpty)
+      'captcha_code': captchaCode,
+    if (networkMode != null && networkMode.isNotEmpty)
+      'network_mode': networkMode,
+  };
+  final r = await dio.post('/api/v1/jwxt/login', data: body);
+  return _parseMapResponse(r);
+}
+
+Future<ApiResponse<Map<String, dynamic>>> sendJwxtMfaCode(
+  String loginToken, {
+  String method = 'auto',
+}) async {
   final r = await dio.post(
-    '/api/v1/jwxt/login',
-    data: {'username': username, 'password': password},
+    '/api/v1/jwxt/mfa/send',
+    data: {'login_token': loginToken, 'method': method},
   );
-  return ApiResponse(
-    code: r.data['code'],
-    message: r.data['message'],
-    data: r.data['data'] as Map<String, dynamic>?,
+  return _parseMapResponse(r);
+}
+
+Future<ApiResponse<Map<String, dynamic>>> verifyJwxtMfaCode(
+  String loginToken,
+  String code, {
+  bool trustDevice = true,
+}) async {
+  final r = await dio.post(
+    '/api/v1/jwxt/mfa/verify',
+    data: {
+      'login_token': loginToken,
+      'code': code,
+      'trust_device': trustDevice,
+    },
   );
+  return _parseMapResponse(r);
 }
 
 Future<ApiResponse<Map<String, dynamic>>> validateSession(String cookie) async {
@@ -192,11 +269,7 @@ Future<ApiResponse<Map<String, dynamic>>> validateSession(String cookie) async {
     '/api/v1/jwxt/session/validate',
     data: {'cookie': cookie},
   );
-  return ApiResponse(
-    code: r.data['code'],
-    message: r.data['message'],
-    data: r.data['data'] as Map<String, dynamic>?,
-  );
+  return _parseMapResponse(r);
 }
 
 // ── 通用教务查询请求 ──
@@ -475,37 +548,40 @@ Future<ApiResponse<Map<String, dynamic>>> fetchElectricityConsume(
 }
 
 ApiResponse<Map<String, dynamic>> _toResponse(Response r) {
-  final code = r.data['code'] as String? ?? '';
-  if (code != 'OK') {
+  final parsed = _parseMapResponse(r);
+  if (!parsed.isOk) {
     throw ApiException(
-      r.data['message'] as String? ?? '请求失败',
-      apiCode: code,
-      statusCode: r.statusCode,
+      parsed.message,
+      apiCode: parsed.code,
+      statusCode: parsed.statusCode,
     );
   }
-  final d = r.data['data'];
-  return ApiResponse(
-    code: code,
-    message: r.data['message'],
-    data: d is Map<String, dynamic>
-        ? d
-        : (d is Map ? Map<String, dynamic>.from(d) : null),
-  );
+  return parsed;
 }
 
 ApiResponse<dynamic> _toResponseAny(Response r) {
-  final code = r.data['code'] as String? ?? '';
+  final raw = r.data;
+  if (raw is! Map) {
+    final status = r.statusCode ?? 0;
+    throw ApiException(
+      _statusMessage(status),
+      apiCode: 'HTTP_$status',
+      statusCode: r.statusCode,
+    );
+  }
+  final code = raw['code'] as String? ?? '';
   if (code != 'OK') {
     throw ApiException(
-      r.data['message'] as String? ?? '请求失败',
+      raw['message'] as String? ?? '请求失败',
       apiCode: code,
       statusCode: r.statusCode,
     );
   }
   return ApiResponse(
     code: code,
-    message: r.data['message'],
-    data: r.data['data'],
+    message: raw['message'] as String? ?? 'ok',
+    data: raw['data'],
+    statusCode: r.statusCode,
   );
 }
 

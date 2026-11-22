@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import '../providers/auth_provider.dart';
 import '../services/notification_service.dart';
 import '../widgets/toast.dart';
-import 'library_page.dart';
 
 class MorePage extends ConsumerWidget {
   const MorePage({super.key});
@@ -18,17 +17,6 @@ class MorePage extends ConsumerWidget {
     final username = auth.username;
 
     final tools = <Widget>[
-      _tile(
-        context,
-        icon: Icons.folder_outlined,
-        color: cs.tertiary,
-        title: '资料库',
-        subtitle: '课件、试卷、教材',
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const LibraryPage()),
-        ),
-      ),
       if (kDebugMode)
         _tile(
           context,
@@ -48,22 +36,16 @@ class MorePage extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.only(top: 12),
         children: [
-          _accountCard(context, username, () => context.push('/login')),
+          _accountCard(
+            context,
+            username,
+            needsReverify: auth.needsReverification,
+            onLogin: () => context.push('/login'),
+          ),
           if (username != null) _logoutButton(context, ref),
-          _section(context, '工具'),
-          _groupCard(context, tools),
-          if (auth.isAdmin) ...[
-            _section(context, '管理'),
-            _groupCard(context, [
-              _tile(
-                context,
-                icon: Icons.admin_panel_settings_outlined,
-                color: cs.primary,
-                title: '管理后台',
-                subtitle: '用户、资料与分类管理',
-                onTap: () => context.push('/admin'),
-              ),
-            ]),
+          if (tools.isNotEmpty) ...[
+            _section(context, '工具'),
+            _groupCard(context, tools),
           ],
           _section(context, '其他'),
           _groupCard(context, [
@@ -92,11 +74,28 @@ class MorePage extends ConsumerWidget {
 
   Widget _accountCard(
     BuildContext context,
-    String? username,
-    VoidCallback onLogin,
-  ) {
+    String? username, {
+    required bool needsReverify,
+    required VoidCallback onLogin,
+  }) {
     final cs = Theme.of(context).colorScheme;
     final loggedIn = username != null;
+    final clickable = !loggedIn || needsReverify;
+    final statusColor = !loggedIn
+        ? cs.onSurfaceVariant
+        : needsReverify
+        ? cs.error
+        : cs.primary;
+    final statusText = !loggedIn
+        ? '点击登录教务系统'
+        : needsReverify
+        ? '会话已过期，点击继续验证'
+        : '教务系统已登录';
+    final statusIcon = !loggedIn
+        ? Icons.login
+        : needsReverify
+        ? Icons.warning_amber_rounded
+        : Icons.check_circle;
     final content = Container(
       height: 80,
       padding: const EdgeInsets.all(16),
@@ -136,19 +135,15 @@ class MorePage extends ConsumerWidget {
                 const SizedBox(height: 3),
                 Row(
                   children: [
-                    Icon(
-                      loggedIn ? Icons.check_circle : Icons.login,
-                      size: 12,
-                      color: loggedIn ? cs.primary : cs.onSurfaceVariant,
-                    ),
+                    Icon(statusIcon, size: 12, color: statusColor),
                     const SizedBox(width: 4),
                     Text(
-                      loggedIn ? '教务系统已登录' : '点击登录教务系统',
+                      statusText,
                       style: TextStyle(
                         fontSize: 12,
-                        color: loggedIn
+                        color: loggedIn && !needsReverify
                             ? cs.primary.withAlpha(200)
-                            : cs.onSurfaceVariant,
+                            : statusColor,
                       ),
                     ),
                   ],
@@ -156,13 +151,13 @@ class MorePage extends ConsumerWidget {
               ],
             ),
           ),
-          if (!loggedIn) Icon(Icons.chevron_right, color: cs.outlineVariant),
+          if (clickable) Icon(Icons.chevron_right, color: cs.outlineVariant),
         ],
       ),
     );
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-      child: loggedIn
+      child: !clickable
           ? content
           : Material(
               color: Colors.transparent,

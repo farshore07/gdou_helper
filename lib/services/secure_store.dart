@@ -9,6 +9,10 @@ Future<void> secureDelete(String key) => _store.delete(key: key);
 
 Future<void> saveCookie(String cookie) => secureWrite('jwxt_cookie', cookie);
 Future<String?> loadCookie() => secureRead('jwxt_cookie');
+Future<void> saveDeviceFingerprint(String fingerprint) =>
+    secureWrite('jwxt_device_fingerprint', fingerprint);
+Future<String?> loadDeviceFingerprint() =>
+    secureRead('jwxt_device_fingerprint');
 Future<void> savePassword(String password) =>
     secureWrite('saved_password', password);
 Future<String?> loadPassword() => secureRead('saved_password');

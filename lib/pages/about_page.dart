@@ -37,7 +37,7 @@ class AboutPage extends ConsumerWidget {
           _buildUpdateSection(context, ref, updateState, cs),
           const Divider(indent: 48, endIndent: 48),
           _info('广海小助手', Icons.info_outline),
-          _info('课表查询 · 考试日程 · 成绩查询 · 宿舍电费', Icons.checklist),
+          _info('课表查询 · 考试日程 · 成绩查询', Icons.checklist),
           const Divider(indent: 48, endIndent: 48),
           _info('数据来源：广东海洋大学教务系统', Icons.cloud_outlined),
           _info('仅限个人学习使用', Icons.verified_user_outlined),
