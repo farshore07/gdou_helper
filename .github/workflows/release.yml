@@ -1,0 +1,165 @@
+name: Release Build
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    env:
+      API_SERVER: ${{ secrets.API_SERVER }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.4'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run analyze and tests
+        run: |
+          flutter analyze
+          flutter test
+
+      - name: Build Android Release APKs
+        run: |
+          DART_DEFINE_ARGS=""
+          if [ -n "$API_SERVER" ]; then
+            DART_DEFINE_ARGS="--dart-define=API_SERVER=$API_SERVER"
+          fi
+          flutter build apk --release --split-per-abi $DART_DEFINE_ARGS
+
+      - name: Stage Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: |
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
+            build/app/outputs/flutter-apk/app-x86_64-release.apk
+
+  build-ios:
+    runs-on: macos-latest
+    env:
+      API_SERVER: ${{ secrets.API_SERVER }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.4'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS Release (unsigned)
+        run: |
+          DART_DEFINE_ARGS=""
+          if [ -n "$API_SERVER" ]; then
+            DART_DEFINE_ARGS="--dart-define=API_SERVER=$API_SERVER"
+          fi
+          flutter build ios --release --no-codesign $DART_DEFINE_ARGS
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r gdou_helper-ios-unsigned.ipa Payload
+
+      - name: Stage iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-ios
+          path: gdou_helper-ios-unsigned.ipa
+
+  publish-release-assets-and-notes:
+    needs: [build-android, build-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          : > SHA256SUMS.txt
+          : > checksum_table.md
+
+          echo "| 文件 | SHA-256 |" >> checksum_table.md
+          echo "| --- | --- |" >> checksum_table.md
+
+          for f in *.apk *.ipa; do
+            [ -e "$f" ] || continue
+            sha256=$(sha256sum "$f" | awk '{print $1}')
+            printf "%s  %s\n" "$sha256" "$f" >> SHA256SUMS.txt
+            printf "| \`%s\` | \`%s\` |\n" "$f" "$sha256" >> checksum_table.md
+          done
+
+      - name: Upload assets and checksums to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.apk
+            dist/*.ipa
+            dist/SHA256SUMS.txt
+
+      - name: Append changelog, authors and checksums to Release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            GENERATED_NOTES=$(gh api "repos/${REPO}/releases/generate-notes" \
+              -f tag_name="$CURRENT_TAG" \
+              -f previous_tag_name="$PREV_TAG" \
+              --jq '.body // ""')
+          else
+            GENERATED_NOTES=$(gh api "repos/${REPO}/releases/generate-notes" \
+              -f tag_name="$CURRENT_TAG" \
+              --jq '.body // ""')
+          fi
+
+          EXISTING_BODY=$(gh release view "$CURRENT_TAG" --json body --jq '.body // ""')
+
+          {
+            if [ -n "$EXISTING_BODY" ]; then
+              printf "%s\n\n" "$EXISTING_BODY"
+            fi
+            if [ -n "$GENERATED_NOTES" ]; then
+              printf "%s\n\n" "$GENERATED_NOTES"
+            fi
+            printf "### 校验信息（SHA-256）\n\n"
+            cat dist/checksum_table.md
+          } > release_notes.md
+
+          gh release edit "$CURRENT_TAG" --notes-file release_notes.md
